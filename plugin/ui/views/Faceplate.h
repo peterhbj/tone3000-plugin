@@ -7,11 +7,11 @@
 // else).
 //
 // Five peer groups share the plate width (CSS space-between): input, the
-// effects cluster (gate + pitch, spaced like the tone stack's knobs so they
+// effects cluster (gate + pitch + fuzz, spaced like the tone stack's knobs so they
 // read as one), tone stack, image slot, output. Every group has a fixed
 // footprint with inactive companions hidden in place, so toggling stereo /
 // spread never shifts the plate. The effects are the exception, by design:
-// Plugin Settings → Show Gate / Show Pitch Shift picks which of them the
+// Plugin Settings → Show Gate / Pitch Shift / Fuzz Factory picks which of them the
 // plate shows (gate by default, pitch hidden), a powered effect always shows
 // so a preset's sound is never controlled from a hidden knob, and the plate
 // re-spreads when the cluster shrinks or goes away.
@@ -21,6 +21,7 @@
 
 #include <memory>
 
+#include "FuzzGroup.h"
 #include "GateGroup.h"
 #include "PitchGroup.h"
 #include "StereoImageGroup.h"
@@ -64,7 +65,8 @@ private:
   // power is (the bindings watch the power switches for the latter).
   GateGroup gate_;
   PitchGroup pitch_;
-  ParamBinding gateEnabled_, pitchEnabled_;
+  FuzzGroup fuzz_;
+  ParamBinding gateEnabled_, pitchEnabled_, fuzzEnabled_;
 
   DimGroup toneDim_;
   ParamKnob bass_, middle_, treble_;

@@ -47,6 +47,9 @@ constexpr SliderDefault kSliders[] = {
     // Pitch shift at 0 st (centre) with its deck at the defaults: tonality
     // Off (top), the 30 ms buffer (second of four detents).
     {"pitchSemitones", 0.5f},    {"pitchTonality", 1.0f},  {"pitchWindow", 1.0f / 3.0f},
+    // Fuzz Factory at the engine's defaults (FuzzFactory::Knobs, 0..1).
+    {"fuzzVol", 0.70f},          {"fuzzGate", 0.04f},     {"fuzzComp", 0.28f},
+    {"fuzzDrive", 0.62f},        {"fuzzStab", 0.94f},
 };
 struct ToggleDefault {
   const char* id;
@@ -62,6 +65,7 @@ constexpr ToggleDefault kToggles[] = {
     {"chainInvertLeft", false},        {"chainInvertRight", false},
     {"gateEnabled", true},             {"toneEqEnabled", true},
     {"pitchEnabled", false},           {"pitchStep", true},
+    {"fuzzEnabled", false},
     {"calibrateInput", false},         {"osEnabled", false},
 };
 

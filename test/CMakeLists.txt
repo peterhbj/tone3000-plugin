@@ -24,6 +24,7 @@ target_sources(DspTests PRIVATE
     src/duplicate_tests.cpp
     src/eq_post_routing_tests.cpp
     src/factory_preset_tests.cpp
+    src/fuzz_factory_tests.cpp
     src/gate_tests.cpp
     src/host_program_tests.cpp
     src/ir_classification_tests.cpp
@@ -65,6 +66,7 @@ target_sources(DspTests PRIVATE
     # is iOS-standalone-only and this suite never runs there (the stub is
     # also what the plugin itself compiles to everywhere but iOS).
     ../plugin/src/StandaloneStateAutosave.cpp
+    ../plugin/src/FuzzFactory.cpp
     ../plugin/src/PitchShift.cpp
     ../plugin/src/StereoOffset.cpp
     ../plugin/src/TunerDetector.cpp

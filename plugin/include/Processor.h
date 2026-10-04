@@ -24,6 +24,7 @@
 #include "RtWorkerPool.h"
 #include "MidiMapper.h"
 #include "NoiseGate.h"
+#include "FuzzFactory.h"
 #include "PitchShift.h"
 #include "Spread.h"
 #include "StereoOffset.h"
@@ -1066,6 +1067,11 @@ private:
   // from processBlock.
   PitchShift pitchShift;
 
+  // Input-stage Fuzz Factory (post pitch shift, host rate; see
+  // FuzzFactory.h). Like the pitch shifter it runs while powered and through
+  // its power-off blend, then not at all. Zero latency.
+  FuzzStage fuzz;
+
   // Raw APVTS parameter atomics, resolved once in the constructor. The audio
   // thread reads these every block; getRawParameterValue is a string-keyed
   // map lookup and has no business on the RT path.
@@ -1112,6 +1118,12 @@ private:
     std::atomic<float>* pitchStep = nullptr;
     std::atomic<float>* pitchTonality = nullptr;
     std::atomic<float>* pitchWindow = nullptr;
+    std::atomic<float>* fuzzEnabled = nullptr;
+    std::atomic<float>* fuzzVol = nullptr;
+    std::atomic<float>* fuzzGate = nullptr;
+    std::atomic<float>* fuzzComp = nullptr;
+    std::atomic<float>* fuzzDrive = nullptr;
+    std::atomic<float>* fuzzStab = nullptr;
   } paramRefs;
   void resolveParamRefs();
 
@@ -1190,6 +1202,8 @@ private:
   float cacheInputCalibrationLevel = 12.0f;
   bool cachePitchEnabled = false;
   PitchShift::Params cachePitch;
+  bool cacheFuzzEnabled = false;
+  FuzzFactory::Knobs cacheFuzz;
 
   void updateEqCoefficients();
   void updateCachedParameters();

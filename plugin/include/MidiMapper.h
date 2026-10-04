@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <functional>
+#include <string>
 #include <vector>
 
 /**
@@ -28,6 +29,12 @@
  *   - Preset steps ("presetPrevious" / "presetNext"): fire-per-press
  *     triggers that walk the preset list, for footswitches programmed with
  *     CC / note buttons instead of program changes.
+ *   - Preset loads ("preset:" + preset id, e.g. "preset:user:metal"): one
+ *     target per preset, fire-per-press, loading that exact preset. Unlike
+ *     program changes this doesn't depend on list order, so saving or
+ *     renaming other presets never moves a footswitch's preset. Preset ids
+ *     survive renames; the processor drops the mapping when the preset is
+ *     deleted.
  *
  * Model: one source per target (mapping identity == targetId); one physical
  * control may drive any number of targets. A global channel filter (omni by
@@ -35,7 +42,7 @@
  * from the pairing instead of configured:
  *   - CC on a continuous parameter → absolute (value/127 → normalized).
  *   - CC on any toggle/trigger target (boolean parameter, block power,
- *     stereo mode, preset step) → fires once per press. Press detection
+ *     stereo mode, preset step, preset load) → fires once per press. Press detection
  *     (see applyEvent): value ≥ 64 fires; a value < 64 also fires unless it
  *     follows a ≥ 64 value from the same control (a momentary switch's
  *     release). Covers momentary pedals (127 then 0), latching values, and
@@ -106,10 +113,20 @@ public:
   /** Mapped preset prev/next controls fired; delta is the net step count
       (+1 per next press, -1 per previous, coalesced like the toggles). */
   std::function<void(int delta)> onPresetStep;
+  /** A mapped preset-load control fired; the preset id (target id minus
+      kPresetLoadPrefix). Last press wins when several land before the async
+      hop. */
+  std::function<void(const juce::String& presetId)> onPresetLoad;
+
+  /** Target id prefix for loading one specific preset ("preset:" + id). */
+  static constexpr const char* kPresetLoadPrefix = "preset:";
+  static juce::String presetLoadTarget(const juce::String& presetId) {
+    return kPresetLoadPrefix + presetId;
+  }
 
 private:
   enum class Source : int { cc = 0, note = 1 };
-  enum class Kind : int { parameter = 0, blockPower = 1, stereoMode = 2, presetStep = 3 };
+  enum class Kind : int { parameter = 0, blockPower = 1, stereoMode = 2, presetStep = 3, presetLoad = 4 };
 
   /** Virtual target id for the chain's stereo on/off (chain state, not an
       APVTS parameter; the UI catalog uses the same id). */
@@ -126,6 +143,9 @@ private:
     int blockIndex = -1;                          // Kind::blockPower only
     bool rightBlock = false;                      // Kind::blockPower only: Right lane
     int presetDelta = 0;                          // Kind::presetStep only: +1 / -1
+    // Kind::presetLoad only: unique per mapping, so the audio thread can name
+    // the fired mapping through an atomic int (see pendingPresetLoad).
+    int presetLoadSerial = 0;
     Source source = Source::cc;
     int number = 0;       // CC number or note number
     bool toggle = false;  // derived: non-parameter kind, boolean param, or note source
@@ -149,8 +169,14 @@ private:
       for anything else. Bounded by the width of the pending-toggle bitmask. */
   static BlockPowerTarget blockPowerTargetFor(const juce::String& targetId);
 
+  static bool isPresetLoadTarget(const juce::String& targetId) {
+    return targetId.startsWith(kPresetLoadPrefix) &&
+           targetId.length() > static_cast<int>(std::char_traits<char>::length(kPresetLoadPrefix));
+  }
+
   bool isValidTarget(const juce::String& targetId) const {
     return blockPowerTargetFor(targetId).index >= 0 || targetId == kStereoTarget ||
+           isPresetLoadTarget(targetId) ||
            targetId == kPresetPrevTarget || targetId == kPresetNextTarget ||
            parameters.getParameter(targetId) != nullptr;
   }
@@ -188,6 +214,10 @@ private:
   std::atomic<juce::uint64> pendingRightBlockToggles{0};
   std::atomic<int> pendingStereoToggles{0};  // flip count; parity applies
   std::atomic<int> pendingPresetSteps{0};    // signed sum of ±1 steps
+  std::atomic<int> pendingPresetLoad{0};     // presetLoadSerial of the last press, 0 = none
+  // Serial source for preset-load mappings (makeMapping is const and may run
+  // off the message thread during state restore, hence atomic).
+  mutable std::atomic<int> nextPresetLoadSerial{1};
   std::atomic<bool> mapDirty{false};                 // gate for onChanged
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiMapper)

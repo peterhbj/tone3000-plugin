@@ -6,7 +6,9 @@
 // CC number into the listening row.
 //
 // Block-power targets are positional, so rows and the picker name each
-// chain slot after the tone currently in it (from the chain state).
+// chain slot after the tone currently in it (from the chain state). Every
+// preset is also a target ("preset:" + id) that loads it directly; those
+// rows and picker entries follow the live preset list.
 #pragma once
 
 #include <memory>
@@ -19,7 +21,10 @@
 
 namespace t3k::ui {
 
-class MidiMapSection : public FormStack, private MidiMapStore::Listener, private ChainStore::Listener {
+class MidiMapSection : public FormStack,
+                       private MidiMapStore::Listener,
+                       private ChainStore::Listener,
+                       private PresetStore::Listener {
 public:
   static constexpr int kLearnTimeoutMs = 10000;
   // The list card and its rows.
@@ -40,9 +45,15 @@ private:
 
   void midiMapChanged() override { rebuild(); }
   void chainChanged(const ChainState&) override { rebuild(); }
+  void presetsChanged(const std::vector<PresetInfo>&) override { rebuild(); }
   void rebuild();
+  // Row / picker title: the catalog name, or the preset's live name for
+  // per-preset load targets.
+  juce::String targetTitle(const juce::String& targetId) const;
   // Row / picker subtitle: group, plus lane and live tone title for block powers.
   juce::String targetContext(const juce::String& targetId) const;
+  // The listed preset behind a "preset:" target, or nullptr.
+  const PresetInfo* presetFor(const juce::String& targetId) const;
   void armTimeout();
   void commitCc();
 
