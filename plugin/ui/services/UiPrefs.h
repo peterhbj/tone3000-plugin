@@ -61,6 +61,7 @@ public:
   // Faceplate effect groups (view only; a powered effect shows regardless).
   static constexpr const char* kShowGateControl = "t3k.showGateControl";
   static constexpr const char* kShowPitchControl = "t3k.showPitchControl";
+  static constexpr const char* kShowFuzzControl = "t3k.showFuzzControl";
   static constexpr const char* kShowPresetPcNumbers = "t3k.showPresetPcNumbers";
   static constexpr const char* kTokens = "t3k_tokens";
   static constexpr const char* kCachedUser = "t3k.cachedUser";

@@ -15,6 +15,7 @@ enum class Key {
   // Faceplate: gate, pitch shift, tone stack, stereo image (spread / align)
   gate, gatePower, gateRelease, gateHold, gateRange,
   pitch, pitchPower, pitchStep, pitchTonality, pitchWindow,
+  fuzz, fuzzPower, fuzzVol, fuzzGate, fuzzComp, fuzzStab,
   toneBass, toneMiddle, toneTreble, tonePower,
   spreadOffset, spreadWobble, spreadWobblePower, spreadCrossover, spreadCrossoverPower,
   spreadDiffuse, spreadAdvert, spreadPower, imageCorrelation, spreadMonoOutput, spreadDualMono,

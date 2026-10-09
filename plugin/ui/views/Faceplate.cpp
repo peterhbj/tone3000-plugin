@@ -19,7 +19,7 @@ namespace {
 constexpr int kPadX = 30, kPadY = 16;
 constexpr int kGroupGap = 10;  // knob ↔ companion within a group
 constexpr int kToneGap = 24;   // between the three tone knobs
-// Gate ↔ Pitch inside the effects cluster: the tone stack's knob spacing,
+// Between Gate / Pitch / Fuzz inside the effects cluster: the tone stack's knob spacing,
 // so the two read as one group against the wider peer gap.
 constexpr int kEffectsGap = kToneGap;
 // Chrome boxes in a bottom-aligned row sit on the secondary-knob centreline.
@@ -223,8 +223,10 @@ Faceplate::Faceplate(Services& services)
       inputMode_(std::make_unique<InputModeButton>(services)),
       gate_(services),
       pitch_(services),
+      fuzz_(services),
       gateEnabled_(services.backend, "gateEnabled"),
       pitchEnabled_(services.backend, "pitchEnabled"),
+      fuzzEnabled_(services.backend, "fuzzEnabled"),
       bass_(services.backend, "toneBass",
             primaryKnob("Bass", scales::tone(), 0.5f, help::Key::toneBass)),
       middle_(services.backend, "toneMid",
@@ -249,6 +251,7 @@ Faceplate::Faceplate(Services& services)
   // the power switches ask for.
   addChildComponent(gate_);
   addChildComponent(pitch_);
+  addChildComponent(fuzz_);
 
   // Powered-off section: knobs + labels dim and go inert; the power button
   // stays outside the dimmed wrapper, bright and clickable.
@@ -268,7 +271,7 @@ Faceplate::Faceplate(Services& services)
   addChildComponent(balance_);
   addAndMakeVisible(output_);
 
-  for (auto* p : {&spreadEnabled_, &gateEnabled_, &pitchEnabled_}) p->onChange = [this] { syncFlags(); };
+  for (auto* p : {&spreadEnabled_, &gateEnabled_, &pitchEnabled_, &fuzzEnabled_}) p->onChange = [this] { syncFlags(); };
   services_.prefs.addListener(this);
   services_.chain.addListener(this);
   services_.autoBalance.addListener(this);
@@ -284,7 +287,9 @@ Faceplate::~Faceplate() {
 void Faceplate::autoMeasureChanged() { autoBalance_.setOn(services_.autoBalance.listening()); }
 
 void Faceplate::prefChanged(const juce::String& key) {
-  if (key == UiPrefs::kShowGateControl || key == UiPrefs::kShowPitchControl) syncFlags();
+  if (key == UiPrefs::kShowGateControl || key == UiPrefs::kShowPitchControl ||
+      key == UiPrefs::kShowFuzzControl)
+    syncFlags();
 }
 
 void Faceplate::showEffect(juce::Component& group, bool show) {
@@ -302,6 +307,7 @@ void Faceplate::syncFlags() {
   // setting hide it.
   showEffect(gate_, services_.prefs.getBool(UiPrefs::kShowGateControl, true) || gateEnabled_.boolValue());
   showEffect(pitch_, services_.prefs.getBool(UiPrefs::kShowPitchControl, false) || pitchEnabled_.boolValue());
+  showEffect(fuzz_, services_.prefs.getBool(UiPrefs::kShowFuzzControl, false) || fuzzEnabled_.boolValue());
 
   // The rig can drive two distinct output channels at all (stereo host bus /
   // 2+ channel output device). False dims the Spread group and makes it
@@ -356,9 +362,10 @@ void Faceplate::resized() {
   // effects cluster holds whichever of gate / pitch is showing (none: the
   // cluster leaves the row and four peers spread).
   const int inputW = primary + (inputMode_->isVisible() ? kGroupGap + inputMode_->getWidth() : 0);
-  const bool gate = gate_.isVisible(), pitch = pitch_.isVisible();
-  const int effectsW =
-      (gate ? GateGroup::kWidth : 0) + (gate && pitch ? kEffectsGap : 0) + (pitch ? PitchGroup::kWidth : 0);
+  const bool gate = gate_.isVisible(), pitch = pitch_.isVisible(), fuzz = fuzz_.isVisible();
+  const int effectCount = (gate ? 1 : 0) + (pitch ? 1 : 0) + (fuzz ? 1 : 0);
+  const int effectsW = (gate ? GateGroup::kWidth : 0) + (pitch ? PitchGroup::kWidth : 0) +
+                       (fuzz ? FuzzGroup::kWidth : 0) + juce::jmax(0, effectCount - 1) * kEffectsGap;
   const int toneW = 3 * primary + 2 * kToneGap + kGroupGap + box;
   const int imageW = StereoImageGroup::kWidth;
   const int outputW = box + kGroupGap + secondary + kGroupGap + primary;
@@ -374,14 +381,16 @@ void Faceplate::resized() {
   inputMode_->setTopLeftPosition(at(x) + primary + kGroupGap, chromeY);
   x += inputW + gap;
 
-  // Effects: Gate + power (+ deck), Pitch + power (+ deck)
-  if (gate) {
-    gate_.setTopLeftPosition(at(x), knobY(secondary));
-    x += GateGroup::kWidth + (pitch ? kEffectsGap : 0);
-  }
-  if (pitch) {
-    pitch_.setTopLeftPosition(at(x), knobY(secondary));
-    x += PitchGroup::kWidth;
+  // Effects, in signal order: Gate, Pitch, Fuzz, each + power (+ deck)
+  bool firstEffect = true;
+  for (auto [group, w] : {std::pair<juce::Component*, int>{&gate_, GateGroup::kWidth},
+                          std::pair<juce::Component*, int>{&pitch_, PitchGroup::kWidth},
+                          std::pair<juce::Component*, int>{&fuzz_, FuzzGroup::kWidth}}) {
+    if (!group->isVisible()) continue;
+    if (!firstEffect) x += kEffectsGap;
+    group->setTopLeftPosition(at(x), knobY(secondary));
+    x += w;
+    firstEffect = false;
   }
   if (effectsW > 0) x += gap;
 

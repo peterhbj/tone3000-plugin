@@ -24,3 +24,7 @@ TONE3000-CERTS/
 notes/
 build-ui/
 build-ui-release/
+
+# Local JS tooling / retired webview build output
+node_modules/
+plugin/webview/

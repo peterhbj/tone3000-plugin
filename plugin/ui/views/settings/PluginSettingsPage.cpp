@@ -91,6 +91,9 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
       showPitch_("Show Pitch Shift",
                  "Transpose your instrument up or down without retuning or use a MIDI expression pedal for "
                  "whammy-style effects."),
+      showFuzz_("Show Fuzz Factory",
+                "A Fuzz Factory in front of the chain: from a smooth Fuzz Face to self-oscillating "
+                "howls and velcro sputter."),
       namSize_("NAM A2 Size",
                "Default size for new NAM blocks. Existing blocks keep their own, so presets load as saved."),
       lite_("A2-Lite", "Sounds great and uses less CPU"),
@@ -151,8 +154,10 @@ PluginSettingsPage::PluginSettingsPage(Services& services)
   // Gate / pitch: view settings the faceplate reads from the same keys.
   showGate_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kShowGateControl, on); };
   showPitch_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kShowPitchControl, on); };
+  showFuzz_.onChange = [this](bool on) { services_.prefs.setBool(UiPrefs::kShowFuzzControl, on); };
   add(showGate_);
   add(showPitch_);
+  add(showFuzz_);
 
   // NAM A2 Size.
   namSize_.setInlineLabel();
@@ -252,6 +257,7 @@ PluginSettingsPage::~PluginSettingsPage() {
 
 void PluginSettingsPage::prefChanged(const juce::String& key) {
   if (key == UiPrefs::kShowHints || key == UiPrefs::kShowGateControl || key == UiPrefs::kShowPitchControl ||
+      key == UiPrefs::kShowFuzzControl ||
       key == UiPrefs::kShowBlockSizeControl || key == UiPrefs::kShowBlockNormalizeControl)
     syncPrefs();
 }
@@ -260,6 +266,7 @@ void PluginSettingsPage::syncPrefs() {
   infoBar_.setValue(services_.hints.enabled());
   showGate_.setValue(services_.prefs.getBool(UiPrefs::kShowGateControl, true));
   showPitch_.setValue(services_.prefs.getBool(UiPrefs::kShowPitchControl, false));
+  showFuzz_.setValue(services_.prefs.getBool(UiPrefs::kShowFuzzControl, false));
   const bool size = services_.prefs.getBool(UiPrefs::kShowBlockSizeControl, false);
   blockSize_.setValue(size);
   blockSize_.setExpanded(size);

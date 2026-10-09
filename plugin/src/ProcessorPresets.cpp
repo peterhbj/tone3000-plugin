@@ -23,6 +23,8 @@ const std::vector<juce::String>& TONE3000Processor::presetParameterIds() {
       "gateHold",       "gateRange",        "toneEqEnabled",
       "pitchEnabled",   "pitchSemitones",   "pitchStep",
       "pitchTonality",  "pitchWindow",
+      "fuzzEnabled",    "fuzzVol",          "fuzzGate",
+      "fuzzComp",       "fuzzDrive",        "fuzzStab",
       "spreadEnabled",  "spreadOffset",     "spreadWobble",
       "spreadWobbleEnabled", "spreadCrossover", "spreadCrossoverEnabled",
       "spreadDiffuseEnabled",
@@ -214,6 +216,9 @@ bool TONE3000Processor::deletePreset(const juce::String& presetId) {
   if (!presetManager.remove(presetId))
     return false;
   hostProgramInfoCache.clear();
+  // A footswitch mapped to the deleted preset would otherwise fire into
+  // nothing; drop it so the MIDI settings stop listing it.
+  midiMapper.removeMapping(MidiMapper::presetLoadTarget(presetId));
   {
     juce::ScopedLock lock(chainMutex);
     if (activePresetId == presetId) {

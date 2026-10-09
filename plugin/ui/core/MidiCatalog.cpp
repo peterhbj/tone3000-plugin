@@ -25,6 +25,12 @@ const std::vector<MappableTarget>& mappableTargets() {
         {"pitchSemitones", "Pitch", "Pitch Shift", K::continuous},
         {"pitchStep", "Pitch Step", "Pitch Shift", K::toggle},
         {"pitchTonality", "Pitch Tonality", "Pitch Shift", K::continuous},
+        {"fuzzEnabled", "Fuzz Power", "Fuzz Factory", K::toggle},
+        {"fuzzVol", "Fuzz Vol", "Fuzz Factory", K::continuous},
+        {"fuzzGate", "Fuzz Gate", "Fuzz Factory", K::continuous},
+        {"fuzzComp", "Fuzz Comp", "Fuzz Factory", K::continuous},
+        {"fuzzDrive", "Fuzz Drive", "Fuzz Factory", K::continuous},
+        {"fuzzStab", "Fuzz Stab", "Fuzz Factory", K::continuous},
         {"toneEqEnabled", "Tone Stack Power", "Tone Stack", K::toggle},
         {"toneBass", "Bass", "Tone Stack", K::continuous},
         {"toneMid", "Mid", "Tone Stack", K::continuous},
@@ -79,6 +85,14 @@ std::optional<BlockPowerTarget> blockPowerTarget(const juce::String& targetId) {
   return BlockPowerTarget{digits.getIntValue() - 1, right};
 }
 
+juce::String presetLoadTarget(const juce::String& presetId) { return kPresetLoadPrefix + presetId; }
+
+std::optional<juce::String> presetIdForTarget(const juce::String& targetId) {
+  const juce::String prefix(kPresetLoadPrefix);
+  if (!targetId.startsWith(prefix) || targetId.length() == prefix.length()) return std::nullopt;
+  return targetId.substring(prefix.length());
+}
+
 juce::String noteName(int note) {
   static const char* const kNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
   return juce::String(kNames[((note % 12) + 12) % 12]) + juce::String(note / 12 - 1);
@@ -91,7 +105,9 @@ juce::String sourceLabel(const MidiMapping& mapping) {
 
 juce::String behaviorLabel(const MidiMapping& mapping) {
   const auto* target = targetById(mapping.targetId);
-  const auto kind = target != nullptr ? std::optional(target->kind) : std::nullopt;
+  const auto kind = target != nullptr                     ? std::optional(target->kind)
+                    : presetIdForTarget(mapping.targetId) ? std::optional(TargetKind::trigger)
+                                                          : std::nullopt;
   if (kind == TargetKind::trigger) return "Trigger";
   if (kind == TargetKind::toggle || mapping.source == MidiSource::note) return "Toggle";
   return "Absolute";

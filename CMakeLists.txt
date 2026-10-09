@@ -347,6 +347,25 @@ if (EXISTS "${_juce_standalone_h}")
         message(STATUS "Patched JUCE StandaloneFilterWindow: crash-safe audio device restore")
     endif()
 
+    if (NOT _juce_standalone_src MATCHES "T3K_NATIVE_APP_WINDOW")
+        string(REPLACE
+            "DocumentWindow (title, backgroundColour, DocumentWindow::minimiseButton | DocumentWindow::closeButton)"
+            "DocumentWindow (title, backgroundColour, DocumentWindow::minimiseButton | DocumentWindow::maximiseButton | DocumentWindow::closeButton) /* T3K_NATIVE_APP_WINDOW */"
+            _juce_standalone_src "${_juce_standalone_src}")
+        string(REPLACE
+            "setTitleBarButtonsRequired (DocumentWindow::minimiseButton | DocumentWindow::closeButton, false);"
+            "setTitleBarButtonsRequired (DocumentWindow::minimiseButton | DocumentWindow::maximiseButton | DocumentWindow::closeButton, false); /* T3K_NATIVE_APP_WINDOW */"
+            _juce_standalone_src "${_juce_standalone_src}")
+        if (NOT _juce_standalone_src MATCHES "T3K_NATIVE_APP_WINDOW")
+            message(FATAL_ERROR
+                "T3K_NATIVE_APP_WINDOW: failed to patch ${_juce_standalone_h}. "
+                "The JUCE source layout likely changed in this version. Update the patch "
+                "anchors in CMakeLists.txt.")
+        endif()
+        set(_juce_standalone_dirty TRUE)
+        message(STATUS "Patched JUCE StandaloneFilterWindow: native maximise button")
+    endif()
+
     if (_juce_standalone_dirty)
         file(WRITE "${_juce_standalone_h}" "${_juce_standalone_src}")
     endif()
@@ -504,6 +523,131 @@ if (EXISTS "${_juce_alsa_cpp}")
         endif()
         file(WRITE "${_juce_alsa_cpp}" "${_juce_alsa_src}")
         message(STATUS "Patched JUCE ALSAThread: scale the stuck-thread close timeout by the i/o period")
+    endif()
+
+    # T3K_ALSA_INTERRUPTIBLE_IO: the timeout above only helps a thread that's
+    # slow; a thread that's genuinely blocked (PipeWire graph stalled, e.g. a
+    # wedged HDMI sink driving it) still gets closeNow(), and snd_pcm_close
+    # frees the pcm while snd_pcm_mmap_readi is running on it. Confirmed from
+    # a core dump: SEGV in the ALSAThread inside snd_pcm_mmap_readi, jumping
+    # through a freed ioplug callback, while the message thread sat in
+    # ALSAThread::close via setAudioDeviceSetup (buffer size change). Fix: the
+    # audio thread only enters readi/writei once enough frames are available,
+    # polling snd_pcm_wait in short slices that check threadShouldExit(), so
+    # it can always leave on its own and close() never needs to close the pcm
+    # from another thread.
+    if (NOT _juce_alsa_src MATCHES "T3K_ALSA_INTERRUPTIBLE_IO")
+        string(REPLACE
+[=[            if ((! waitForThreadToExit (stuckTimeoutMs)) && audioIoInProgress && numCallbacks == callbacksToStop)
+            {
+                JUCE_ALSA_LOG ("Thread is stuck in i/o. Is pulseaudio suspended?");
+
+                if (outputDevice != nullptr) outputDevice->closeNow();
+                if (inputDevice != nullptr) inputDevice->closeNow();
+            }]=]
+[=[            // T3K_ALSA_INTERRUPTIBLE_IO: never snd_pcm_close() from this
+            // thread while the audio thread may be inside readi/writei (that
+            // frees the pcm under it). run() only blocks in short slices that
+            // check threadShouldExit(), so stopThread() below always succeeds.
+            if ((! waitForThreadToExit (stuckTimeoutMs)) && audioIoInProgress && numCallbacks == callbacksToStop)
+                JUCE_ALSA_LOG ("Thread is slow to leave i/o, waiting for it");]=]
+            _juce_alsa_src "${_juce_alsa_src}")
+        string(REPLACE
+[=[    void run() override
+    {
+        while (! threadShouldExit())
+        {
+            if (inputDevice != nullptr && inputDevice->handle != nullptr)
+            {
+                if (outputDevice == nullptr || outputDevice->handle == nullptr)
+                {
+                    JUCE_ALSA_FAILED (snd_pcm_wait (inputDevice->handle, 2000));
+
+                    if (threadShouldExit())
+                        break;
+
+                    auto avail = snd_pcm_avail_update (inputDevice->handle);
+
+                    if (avail < 0)
+                        JUCE_ALSA_FAILED (snd_pcm_recover (inputDevice->handle, (int) avail, 0));
+                }
+
+                audioIoInProgress = true;]=]
+[=[    // T3K_ALSA_INTERRUPTIBLE_IO: wait until a full buffer can be read or
+    // written without blocking, in short slices so a stalled device can't
+    // keep the thread from noticing threadShouldExit(). Capture is started
+    // explicitly (readi would otherwise auto-start it); with snd_pcm_link
+    // that also starts the output, as the first readi used to.
+    bool waitForFrames (ALSADevice& device)
+    {
+        while (! threadShouldExit())
+        {
+            if (snd_pcm_stream (device.handle) == SND_PCM_STREAM_CAPTURE
+                && snd_pcm_state (device.handle) == SND_PCM_STATE_PREPARED
+                && JUCE_ALSA_FAILED (snd_pcm_start (device.handle)))
+                return false;
+
+            const auto avail = snd_pcm_avail_update (device.handle);
+
+            if (avail < 0)
+            {
+                if (JUCE_ALSA_FAILED (snd_pcm_recover (device.handle, (int) avail, 1 /* silent */)))
+                    return false;
+
+                continue;
+            }
+
+            if (avail >= bufferSize)
+                return true;
+
+            snd_pcm_wait (device.handle, 50);
+        }
+
+        return false;
+    }
+
+    void run() override
+    {
+        while (! threadShouldExit())
+        {
+            if (inputDevice != nullptr && inputDevice->handle != nullptr)
+            {
+                if (! waitForFrames (*inputDevice))
+                    break;
+
+                audioIoInProgress = true;]=]
+            _juce_alsa_src "${_juce_alsa_src}")
+        string(REPLACE
+[=[            if (outputDevice != nullptr && outputDevice->handle != nullptr)
+            {
+                JUCE_ALSA_FAILED (snd_pcm_wait (outputDevice->handle, 2000));
+
+                if (threadShouldExit())
+                    break;
+
+                auto avail = snd_pcm_avail_update (outputDevice->handle);
+
+                if (avail < 0)
+                    JUCE_ALSA_FAILED (snd_pcm_recover (outputDevice->handle, (int) avail, 0));
+
+                audioIoInProgress = true;]=]
+[=[            if (outputDevice != nullptr && outputDevice->handle != nullptr)
+            {
+                if (! waitForFrames (*outputDevice))
+                    break;
+
+                audioIoInProgress = true;]=]
+            _juce_alsa_src "${_juce_alsa_src}")
+        if (NOT _juce_alsa_src MATCHES "waitForFrames \\(\\*inputDevice\\)"
+            OR NOT _juce_alsa_src MATCHES "waitForFrames \\(\\*outputDevice\\)"
+            OR NOT _juce_alsa_src MATCHES "Thread is slow to leave i/o")
+            message(FATAL_ERROR
+                "T3K_ALSA_INTERRUPTIBLE_IO: failed to patch ${_juce_alsa_cpp}. "
+                "The JUCE source layout likely changed in this version. Update the patch "
+                "anchors in CMakeLists.txt.")
+        endif()
+        file(WRITE "${_juce_alsa_cpp}" "${_juce_alsa_src}")
+        message(STATUS "Patched JUCE ALSAThread: interruptible i/o waits, no cross-thread pcm close")
     endif()
 endif()
 

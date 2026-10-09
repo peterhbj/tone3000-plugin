@@ -88,10 +88,11 @@ TONE3000Processor::TONE3000Processor()
 
   // MIDI performance events (delivered on the message thread, see
   // MidiMapper): program changes and prev/next steps walk the preset list,
-  // mapped block-power and stereo stomps route through the normal undoable
-  // chain edit paths.
+  // per-preset controls load their preset directly, mapped block-power and
+  // stereo stomps route through the normal undoable chain edit paths.
   midiMapper.onProgramChange = [this](int program) { loadPresetAtIndex(program); };
   midiMapper.onPresetStep = [this](int delta) { stepPreset(delta); };
+  midiMapper.onPresetLoad = [this](const juce::String& presetId) { loadPreset(presetId); };
   midiMapper.onBlockPowerToggle = [this](int index, bool right) {
     toggleBlockPower(index, right);
   };
@@ -161,6 +162,12 @@ void TONE3000Processor::resolveParamRefs() {
   paramRefs.pitchStep = get("pitchStep");
   paramRefs.pitchTonality = get("pitchTonality");
   paramRefs.pitchWindow = get("pitchWindow");
+  paramRefs.fuzzEnabled = get("fuzzEnabled");
+  paramRefs.fuzzVol = get("fuzzVol");
+  paramRefs.fuzzGate = get("fuzzGate");
+  paramRefs.fuzzComp = get("fuzzComp");
+  paramRefs.fuzzDrive = get("fuzzDrive");
+  paramRefs.fuzzStab = get("fuzzStab");
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createParameterLayout() {
@@ -363,6 +370,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createPar
       juce::ParameterID{"pitchWindow", 43}, "pitchWindow", windows,
       static_cast<int>(PitchShift::kDefaultWindow),
       juce::AudioParameterChoiceAttributes().withAutomatable(false)));
+
+  // Fuzz Factory (faceplate, after Pitch; see FuzzFactory.h). Off by default
+  // so a fresh chain stays transparent. The five knobs are the pedal's own
+  // 0..1 travel, defaulting to the engine's always-on Face setting.
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"fuzzEnabled", 44}, "fuzzEnabled", false));
+  const FuzzFactory::Knobs fuzzDefaults;
+  const std::pair<const char*, float> fuzzKnobs[] = {
+      {"fuzzVol", fuzzDefaults.vol},     {"fuzzGate", fuzzDefaults.gate},
+      {"fuzzComp", fuzzDefaults.comp},   {"fuzzDrive", fuzzDefaults.drive},
+      {"fuzzStab", fuzzDefaults.stab},
+  };
+  int fuzzHint = 45;
+  for (const auto& [id, def] : fuzzKnobs)
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{id, fuzzHint++}, id,
+                                                           0.0f, 1.0f, def));
 
   return layout;
 }
@@ -877,6 +900,7 @@ void TONE3000Processor::prepareToPlay(double sampleRate, int samplesPerBlock) {
   // The oversampler is minimum-phase (zero reported latency), so the boundary
   // and a powered pitch shifter are the only latency sources at any factor.
   pitchShift.prepare(sampleRate, juce::jmax(1, samplesPerBlock));
+  fuzz.prepare(sampleRate);
   updateLatency();
   DBG("Chain boundary " << (boundaryNeeded ? "engaged" : "bypassed")
       << " (latency: " << chainBoundaryLatency << " samples)");
@@ -1150,6 +1174,10 @@ void TONE3000Processor::updateCachedParameters() {
   cachePitch.tonalityHz = tonalityHz < PitchShift::kTonalityOffHz ? tonalityHz : 0.0f;
   cachePitch.window =
       PitchShift::windowFromIndex(static_cast<int>(std::lround(paramRefs.pitchWindow->load())));
+
+  cacheFuzzEnabled = loadBool(paramRefs.fuzzEnabled);
+  cacheFuzz = {paramRefs.fuzzVol->load(), paramRefs.fuzzGate->load(), paramRefs.fuzzComp->load(),
+               paramRefs.fuzzDrive->load(), paramRefs.fuzzStab->load()};
 }
 
 // ##########################
@@ -1859,6 +1887,15 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
   if (pitchShift.isRunning()) {
     pitchShift.setParams(cachePitch);
     pitchShift.process(buffer);
+  }
+
+  // Fuzz Factory (FuzzFactory.h), after the pitch shifter so a whammy runs
+  // into the fuzz, and like it ahead of the auto-align probe. A bit-exact
+  // passthrough once its power-off blend lands.
+  fuzz.setEnabled(cacheFuzzEnabled);
+  if (fuzz.isRunning()) {
+    fuzz.setKnobs(cacheFuzz);
+    fuzz.process(buffer);
   }
 
   // #########################

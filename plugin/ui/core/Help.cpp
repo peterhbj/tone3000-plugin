@@ -87,6 +87,15 @@ std::map<Key, String> buildTable() {
       knobDesktop("Tonality", "highs above this stay put, 1-20 kHz. Keeps pick attack bright; Off: pure shift.");
   t[Key::pitchWindow] = knobDesktop(
       "Buffer", "shifter delay buffer, 20-60 ms. Short: less latency · long: cleaner, more latency.");
+  t[Key::fuzz] = knobDesktop("Fuzz", "Fuzz Factory drive, Q2's gain. Right-click: all five knobs.");
+  t[Key::fuzzPower] = kTouch ? U("Fuzz Power: Fuzz Factory on/off.")
+                             : U("Fuzz Power: Fuzz Factory on/off. Right-click: all five knobs.");
+  t[Key::fuzzVol] = knobDesktop("Vol", "Fuzz Factory output level.");
+  t[Key::fuzzGate] = knobDesktop("Gate", "starves the fuzz: up chokes the tail into a sputter.");
+  t[Key::fuzzComp] =
+      knobDesktop("Comp", "treble and pitch of the oscillation. 0: velcro · up: bass rip to squeal.");
+  t[Key::fuzzStab] =
+      knobDesktop("Stab", "stability. Up: a still Fuzz Face · down: it howls on its own (Comp sets the pitch).");
   t[Key::toneBass] = knobDesktop("Bass", "tone stack lows, 0-10: ±20 dB shelf at 150 Hz.");
   t[Key::toneMiddle] = knobDesktop("Middle", "tone stack mids, 0-10: ±15 dB bell at 425 Hz.");
   t[Key::toneTreble] = knobDesktop("Treble", "tone stack highs, 0-10: ±10 dB shelf at 1.8 kHz.");
