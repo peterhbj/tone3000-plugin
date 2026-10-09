@@ -33,7 +33,10 @@
  * control may drive any number of targets. A global channel filter (omni by
  * default) gates everything, program changes included. Behavior is derived
  * from the pairing instead of configured:
- *   - CC on a continuous parameter → absolute (value/127 → normalized).
+ *   - CC on a continuous parameter → absolute (value/127 → normalized),
+ *     optionally squeezed into a sub-range (setCcRange): an expression
+ *     pedal on Pitch with a 0..+12 range is a whammy that rests at unison
+ *     heel-down and reaches the octave toe-down.
  *   - CC on any toggle/trigger target (boolean parameter, block power,
  *     stereo mode, preset step) → fires once per press. Press detection
  *     (see applyEvent): value ≥ 64 fires; a value < 64 also fires unless it
@@ -68,7 +71,10 @@ public:
   void processMidi(const juce::MidiBuffer& midi);
 
   // Message thread (the UI's calls).
-  /** { channel, learnTargetId, mappings: [{ targetId, source, number }] } */
+  /** { channel, learnTargetId, mappings: [{ targetId, source, number }] }.
+      Mappings that take a range (CC on a continuous parameter) also carry
+      { rangeLow, rangeHigh } (the current ends) and { rangeMin, rangeMax }
+      (the parameter's full span), all in real units. */
   juce::var getState() const;
   /** Global channel filter: 0 = omni, 1-16 = that channel only. */
   void setChannelFilter(int channel);
@@ -83,6 +89,14 @@ public:
       learn armed for it. Rejects unknown targets and numbers outside
       0-127. */
   bool setCcMapping(const juce::String& targetId, int ccNumber);
+  /** Limit a CC mapping on a continuous parameter to part of the
+      parameter's range, in its real units (semitones, dB): CC 0 lands on
+      `low`, CC 127 on `high`, linear in the parameter's normalized space in
+      between. low > high inverts the sweep (a pedal mounted the other way
+      round). Both ends clamp to the parameter's range. Survives re-learn
+      and typed reassignment of the same target. False for unmapped
+      targets, note sources and toggle/trigger targets. */
+  bool setCcRange(const juce::String& targetId, float low, float high);
 
   // Plugin state.
   juce::ValueTree toValueTree() const;
@@ -132,6 +146,13 @@ private:
     // Audio-thread scratch for CC press detection (see applyEvent): the last
     // controller value seen for this mapping, -1 before the first event.
     int lastCcValue = -1;
+    // CC → normalized span for continuous parameters (setCcRange): CC 0
+    // lands on rangeLow, 127 on rangeHigh. Full range by default.
+    float rangeLow = 0.0f;
+    float rangeHigh = 1.0f;
+
+    bool takesRange() const { return kind == Kind::parameter && !toggle; }
+    bool hasCustomRange() const { return rangeLow != 0.0f || rangeHigh != 1.0f; }
   };
 
   static Source sourceFromString(const juce::String& s) {
@@ -156,6 +177,9 @@ private:
   }
 
   Mapping makeMapping(const juce::String& targetId, Source source, int number) const;
+  /** Swap `mapping` in for any existing one on its target (caller holds
+      mapLock), carrying the old range over when the new pairing takes one. */
+  void replaceMapping(Mapping mapping);
   void applyEvent(Mapping& mapping, const juce::MidiMessage& msg);
 
   /** All deferred work lands here on the message thread: commit a pending

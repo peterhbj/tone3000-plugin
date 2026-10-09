@@ -11,7 +11,8 @@
 //     stomp, and switches that only ever send low values still fire on
 //     every press (the regression behind "CC works for notes but not CC"),
 //   - note-ons always toggle,
-//   - CC on a continuous parameter tracks absolutely,
+//   - CC on a continuous parameter tracks absolutely, optionally within a
+//     sub-range (the expression-pedal whammy: Pitch 0..+12),
 //   - block-power targets deliver their position and lane (left / right),
 //   - preset prev/next virtual targets deliver coalesced step deltas,
 //   - program changes deliver their program number unmapped.
@@ -161,6 +162,72 @@ TEST(MidiMapperTest, CcOnContinuousParameterIsAbsolute) {
   proc.midiMapper.processMidi(ccEvent(11, 0));
   EXPECT_NEAR(paramValue(proc, "inputLevel"),
               proc.parameters.getParameter("inputLevel")->convertFrom0to1(0.0f), 1e-4f);
+}
+
+// The whammy setup: an expression pedal on Pitch, squeezed to 0..+12 so
+// heel-down is unison and toe-down the octave.
+TEST(MidiMapperTest, CcRangeSqueezesTheSweep) {
+  TONE3000Processor proc;
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("pitchSemitones", 7));
+  ASSERT_TRUE(proc.midiMapper.setCcRange("pitchSemitones", 0.0f, 12.0f));
+
+  proc.midiMapper.processMidi(ccEvent(7, 0));
+  EXPECT_NEAR(paramValue(proc, "pitchSemitones"), 0.0f, 1e-3f);
+  proc.midiMapper.processMidi(ccEvent(7, 127));
+  EXPECT_NEAR(paramValue(proc, "pitchSemitones"), 12.0f, 1e-3f);
+  proc.midiMapper.processMidi(ccEvent(7, 64));
+  // The knob snaps to 0.01 st.
+  EXPECT_NEAR(paramValue(proc, "pitchSemitones"), 12.0f * 64.0f / 127.0f, 0.01f);
+
+  const juce::var state = proc.midiMapper.getState();
+  const auto& mapping = (*state["mappings"].getArray())[0];
+  EXPECT_NEAR(static_cast<float>(mapping["rangeLow"]), 0.0f, 1e-3f);
+  EXPECT_NEAR(static_cast<float>(mapping["rangeHigh"]), 12.0f, 1e-3f);
+  EXPECT_NEAR(static_cast<float>(mapping["rangeMin"]), -24.0f, 1e-3f);
+  EXPECT_NEAR(static_cast<float>(mapping["rangeMax"]), 24.0f, 1e-3f);
+}
+
+TEST(MidiMapperTest, CcRangeInvertsAndClamps) {
+  TONE3000Processor proc;
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("pitchSemitones", 7));
+  ASSERT_TRUE(proc.midiMapper.setCcRange("pitchSemitones", 12.0f, -99.0f));
+
+  proc.midiMapper.processMidi(ccEvent(7, 0));
+  EXPECT_NEAR(paramValue(proc, "pitchSemitones"), 12.0f, 1e-3f);
+  proc.midiMapper.processMidi(ccEvent(7, 127));
+  EXPECT_NEAR(paramValue(proc, "pitchSemitones"), -24.0f, 1e-3f) << "the low end clamps to the knob";
+}
+
+TEST(MidiMapperTest, CcRangeOnlyForContinuousCcMappings) {
+  TONE3000Processor proc;
+  EXPECT_FALSE(proc.midiMapper.setCcRange("pitchSemitones", 0.0f, 12.0f)) << "unmapped";
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("gateEnabled", 20));
+  EXPECT_FALSE(proc.midiMapper.setCcRange("gateEnabled", 0.0f, 1.0f)) << "toggle target";
+  learn(proc, "inputLevel", noteOnEvent(40));
+  EXPECT_FALSE(proc.midiMapper.setCcRange("inputLevel", 0.0f, 1.0f)) << "note source toggles";
+
+  const juce::var state = proc.midiMapper.getState();
+  for (const auto& mapping : *state["mappings"].getArray())
+    EXPECT_FALSE(mapping.hasProperty("rangeLow")) << mapping["targetId"].toString();
+}
+
+TEST(MidiMapperTest, CcRangeSurvivesRelearnAndStateRoundTrip) {
+  TONE3000Processor proc;
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("pitchSemitones", 7));
+  ASSERT_TRUE(proc.midiMapper.setCcRange("pitchSemitones", 0.0f, 12.0f));
+  learn(proc, "pitchSemitones", ccEvent(11, 30));  // pedal moved to another CC
+
+  TONE3000Processor restored;
+  restored.midiMapper.restoreFromValueTree(proc.midiMapper.toValueTree());
+  pumpMessages();
+  restored.midiMapper.processMidi(ccEvent(11, 127));
+  EXPECT_NEAR(paramValue(restored, "pitchSemitones"), 12.0f, 1e-3f);
+  restored.midiMapper.processMidi(ccEvent(11, 0));
+  EXPECT_NEAR(paramValue(restored, "pitchSemitones"), 0.0f, 1e-3f);
+
+  // A full-range mapping writes no range, so old builds read the same tree.
+  ASSERT_TRUE(proc.midiMapper.setCcRange("pitchSemitones", -24.0f, 24.0f));
+  EXPECT_FALSE(proc.midiMapper.toValueTree().getChild(0).hasProperty("rangeLow"));
 }
 
 TEST(MidiMapperTest, BlockPowerTargetsRouteToTheirLane) {

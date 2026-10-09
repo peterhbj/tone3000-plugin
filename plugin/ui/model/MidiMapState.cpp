@@ -11,9 +11,13 @@ MidiMapState MidiMapState::parse(const juce::var& v) {
   s.channel = integer(v, "channel");
   s.learnTargetId = str(v, "learnTargetId");
   s.mappings = list<MidiMapping>(v, "mappings", [](const juce::var& m) {
-    return MidiMapping{str(m, "targetId"),
-                       str(m, "source", "cc") == "note" ? MidiSource::note : MidiSource::cc,
-                       integer(m, "number")};
+    MidiMapping mapping{str(m, "targetId"),
+                        str(m, "source", "cc") == "note" ? MidiSource::note : MidiSource::cc,
+                        integer(m, "number")};
+    const auto low = optNum(m, "rangeLow"), high = optNum(m, "rangeHigh");
+    const auto min = optNum(m, "rangeMin"), max = optNum(m, "rangeMax");
+    if (low && high && min && max) mapping.range = MidiRange{*low, *high, *min, *max};
+    return mapping;
   });
   return s;
 }

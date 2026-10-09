@@ -34,6 +34,8 @@ public:
   void removeMapping(const juce::String& targetId);
   // Assign a CC number directly, the typed alternative to learn.
   void setCcMapping(const juce::String& targetId, int number);
+  // CC 0 → low, CC 127 → high, in the parameter's real units.
+  void setCcRange(const juce::String& targetId, double low, double high);
 
 private:
   void midiMapChanged() override { refresh(); }

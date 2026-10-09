@@ -43,4 +43,9 @@ void MidiMapStore::setCcMapping(const juce::String& targetId, int number) {
   refresh();
 }
 
+void MidiMapStore::setCcRange(const juce::String& targetId, double low, double high) {
+  backend_.setMidiCcRange(targetId, low, high);
+  refresh();
+}
+
 }  // namespace t3k::ui
