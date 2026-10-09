@@ -241,7 +241,10 @@ flowchart LR
   lookahead, a slower attack only softens pick transients.
 - **Pitch Shift**: a polyphonic pitch shifter on the clean DI, ahead of the
   amp, so a `-2` plays a standard-tuned guitar as drop D through the whole
-  rig, and a MIDI expression pedal on the knob plays it like a whammy. Off
+  rig, and a MIDI expression pedal on the knob plays it like a whammy
+  (Plugin Settings → MIDI Mapping: map Pitch to the pedal's CC, set its
+  Range to `0` to `12` for unison heel-down and the octave toe-down, and
+  turn STEP off for a smooth sweep). Off
   by default; the faceplate Pitch knob sets the shift, two octaves either
   way (±24), and powering on is what adds latency. The knob is also hidden
   by default: Plugin Settings → Effects picks which of Gate and Pitch Shift

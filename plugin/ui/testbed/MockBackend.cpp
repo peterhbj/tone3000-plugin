@@ -334,6 +334,18 @@ bool MockBackend::removeMidiMapping(const juce::String& targetId) {
   return true;
 }
 
+bool MockBackend::setMidiCcRange(const juce::String& targetId, double low, double high) {
+  for (auto& m : *midiMap_["mappings"].getArray())
+    if (m["targetId"].toString() == targetId && m.hasProperty("rangeMin")) {
+      const double min = m["rangeMin"], max = m["rangeMax"];
+      m.getDynamicObject()->setProperty("rangeLow", juce::jlimit(min, max, low));
+      m.getDynamicObject()->setProperty("rangeHigh", juce::jlimit(min, max, high));
+      notifyMidiMapChanged();
+      return true;
+    }
+  return false;
+}
+
 juce::var MockBackend::getMeterLevels() {
   if (signal_ != nullptr)
     return signal_->meters(chain_);

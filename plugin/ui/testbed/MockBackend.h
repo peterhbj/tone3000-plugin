@@ -114,6 +114,7 @@ public:
   void cancelMidiLearn() override;
   bool removeMidiMapping(const juce::String& targetId) override;
   bool setMidiCcMapping(const juce::String&, int) override { return true; }
+  bool setMidiCcRange(const juce::String& targetId, double low, double high) override;
 
   juce::var getMeterLevels() override;
   void setTunerEnabled(bool) override {}

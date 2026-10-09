@@ -120,7 +120,8 @@ void MidiMapper::applyEvent(Mapping& mapping, const juce::MidiMessage& msg) {
     return;
   }
 
-  mapping.param->setValueNotifyingHost(static_cast<float>(msg.getControllerValue()) / 127.0f);
+  const float position = static_cast<float>(msg.getControllerValue()) / 127.0f;
+  mapping.param->setValueNotifyingHost(mapping.rangeLow + (mapping.rangeHigh - mapping.rangeLow) * position);
 }
 
 //==============================================================================
@@ -141,6 +142,13 @@ juce::var MidiMapper::getState() const {
       m->setProperty("targetId", mapping.targetId);
       m->setProperty("source", sourceToString(mapping.source));
       m->setProperty("number", mapping.number);
+      if (mapping.takesRange()) {
+        const auto& range = mapping.param->getNormalisableRange();
+        m->setProperty("rangeLow", mapping.param->convertFrom0to1(mapping.rangeLow));
+        m->setProperty("rangeHigh", mapping.param->convertFrom0to1(mapping.rangeHigh));
+        m->setProperty("rangeMin", range.start);
+        m->setProperty("rangeMax", range.end);
+      }
       list.add(juce::var(m));
     }
   }
@@ -189,8 +197,7 @@ bool MidiMapper::setCcMapping(const juce::String& targetId, int ccNumber) {
   auto mapping = makeMapping(targetId, Source::cc, ccNumber);
   {
     const juce::SpinLock::ScopedLockType lock(mapLock);
-    std::erase_if(mappings, [&](const Mapping& m) { return m.targetId == targetId; });
-    mappings.push_back(std::move(mapping));
+    replaceMapping(std::move(mapping));
   }
   // Typing supersedes a listen on the same target, including a capture
   // already waiting for its async commit; a learn armed for another target
@@ -202,6 +209,34 @@ bool MidiMapper::setCcMapping(const juce::String& targetId, int ccNumber) {
   }
   notifyChanged();
   return true;
+}
+
+bool MidiMapper::setCcRange(const juce::String& targetId, float low, float high) {
+  {
+    const juce::SpinLock::ScopedLockType lock(mapLock);
+    auto it = std::find_if(mappings.begin(), mappings.end(),
+                           [&](const Mapping& m) { return m.targetId == targetId; });
+    if (it == mappings.end() || it->source != Source::cc || !it->takesRange())
+      return false;
+    // convertTo0to1 clamps to the parameter's range.
+    it->rangeLow = it->param->convertTo0to1(low);
+    it->rangeHigh = it->param->convertTo0to1(high);
+  }
+  notifyChanged();
+  return true;
+}
+
+void MidiMapper::replaceMapping(Mapping mapping) {
+  auto old = std::find_if(mappings.begin(), mappings.end(),
+                          [&](const Mapping& m) { return m.targetId == mapping.targetId; });
+  if (old != mappings.end()) {
+    if (mapping.source == Source::cc && mapping.takesRange()) {
+      mapping.rangeLow = old->rangeLow;
+      mapping.rangeHigh = old->rangeHigh;
+    }
+    mappings.erase(old);
+  }
+  mappings.push_back(std::move(mapping));
 }
 
 MidiMapper::Mapping MidiMapper::makeMapping(const juce::String& targetId, Source source,
@@ -234,8 +269,7 @@ void MidiMapper::handleAsyncUpdate() {
     if (isValidTarget(learnTargetId)) {
       auto mapping = makeMapping(learnTargetId, source, number);
       const juce::SpinLock::ScopedLockType lock(mapLock);
-      std::erase_if(mappings, [&](const Mapping& m) { return m.targetId == learnTargetId; });
-      mappings.push_back(std::move(mapping));
+      replaceMapping(std::move(mapping));
     }
     learnTargetId.clear();
     mapDirty.store(true);
@@ -281,6 +315,12 @@ juce::ValueTree MidiMapper::toValueTree() const {
     child.setProperty("targetId", mapping.targetId, nullptr);
     child.setProperty("source", sourceToString(mapping.source), nullptr);
     child.setProperty("number", mapping.number, nullptr);
+    // Real units on disk, so a parameter whose span widens later keeps the
+    // same musical range. Only written when narrowed; old builds ignore it.
+    if (mapping.takesRange() && mapping.hasCustomRange()) {
+      child.setProperty("rangeLow", mapping.param->convertFrom0to1(mapping.rangeLow), nullptr);
+      child.setProperty("rangeHigh", mapping.param->convertFrom0to1(mapping.rangeHigh), nullptr);
+    }
     tree.appendChild(child, nullptr);
   }
   return tree;
@@ -298,9 +338,14 @@ void MidiMapper::restoreFromValueTree(const juce::ValueTree& tree) {
       const auto targetId = child.getProperty("targetId").toString();
       if (!isValidTarget(targetId))
         continue;  // unknown/renamed target in an old project: drop it
-      restored.push_back(makeMapping(targetId,
-                                     sourceFromString(child.getProperty("source").toString()),
-                                     static_cast<int>(child.getProperty("number", 0))));
+      auto mapping = makeMapping(targetId, sourceFromString(child.getProperty("source").toString()),
+                                 static_cast<int>(child.getProperty("number", 0)));
+      if (mapping.source == Source::cc && mapping.takesRange() && child.hasProperty("rangeLow") &&
+          child.hasProperty("rangeHigh")) {
+        mapping.rangeLow = mapping.param->convertTo0to1(static_cast<float>(child.getProperty("rangeLow")));
+        mapping.rangeHigh = mapping.param->convertTo0to1(static_cast<float>(child.getProperty("rangeHigh")));
+      }
+      restored.push_back(std::move(mapping));
     }
   }
 

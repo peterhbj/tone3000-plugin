@@ -1,6 +1,7 @@
 #include "MidiMapSection.h"
 
 #include <cmath>
+#include <optional>
 
 #include "core/Fonts.h"
 #include "core/MidiCatalog.h"
@@ -16,6 +17,7 @@ constexpr float kListenPulseMs = 1200;
 constexpr float kListenDimAlpha = 0.45f;
 constexpr int kListenDot = 7, kListenGap = 8;
 constexpr int kCcFieldWidth = 54;
+constexpr int kRangeFieldWidth = 54, kRangeGap = 8, kRangeLabelGap = 8;
 
 const juce::String kEmptyCopy =
     "No mappings yet. Choose a control, then move it on your MIDI device or type its CC number.";
@@ -25,6 +27,13 @@ const juce::String kPresetsCaption =
 
 int lineHeight(float px) { return Fonts::normalLineHeight(px); }
 int monoLineHeight(float px) { return Fonts::normalLineHeight(Fonts::mono(px)); }
+
+// Range ends as typed: whole numbers bare, otherwise up to two decimals.
+juce::String formatRangeValue(double v) {
+  const double rounded = std::round(v * 100.0) / 100.0;
+  if (std::abs(rounded - std::round(rounded)) < 1e-9) return juce::String(juce::roundToInt(rounded));
+  return juce::String(rounded, 2).trimCharactersAtEnd("0");
+}
 }  // namespace
 
 // Row
@@ -44,7 +53,9 @@ public:
   static int targetCellHeight() { return lineHeight(kTitlePx) + kSubtitleGap + lineHeight(kSubtitlePx); }
   // The row's content height (flex align center) before padding.
   virtual int contentHeight() const { return juce::jmax(targetCellHeight(), kIconButton); }
-  int height() const { return 2 * kRowPadY + contentHeight() + (first_ ? 0 : 1); }
+  // Extra controls under the main line (a mapping's CC range).
+  virtual int footerHeight() const { return 0; }
+  int height() const { return 2 * kRowPadY + contentHeight() + footerHeight() + (first_ ? 0 : 1); }
 
   void paint(juce::Graphics& g) override {
     if (!first_) {
@@ -65,10 +76,13 @@ protected:
   juce::Rectangle<int> contentBox() const {
     return getLocalBounds().withTrimmedTop(first_ ? 0 : 1).reduced(kRowPadX, kRowPadY);
   }
+  // The main line: the content box above the footer.
+  juce::Rectangle<int> mainBox() const { return contentBox().withTrimmedBottom(footerHeight()); }
+  juce::Rectangle<int> footerBox() const { return contentBox().removeFromBottom(footerHeight()); }
   // Width taken by the right-hand controls (including the gaps before them).
   virtual int trailingWidth() const = 0;
   juce::Rectangle<int> targetCell() const {
-    const auto box = contentBox();
+    const auto box = mainBox();
     const int h = targetCellHeight();
     return {box.getX(), box.getY() + (box.getHeight() - h) / 2, box.getWidth() - trailingWidth(), h};
   }
@@ -80,12 +94,16 @@ private:
 
 // MappingRow
 // Source + behaviour on the right, then the borderless re-learn / remove
-// icon buttons (muted at rest, white on hover).
+// icon buttons (muted at rest, white on hover). A CC on a continuous control
+// adds a "Range [low] to [high]" line underneath: where CC 0 and CC 127 land,
+// in the control's units (Pitch 0 to 12 makes an expression pedal a whammy).
 class MidiMapSection::MappingRow : public Row {
 public:
   MappingRow(const MidiMapping& mapping, juce::String context, std::function<void()> onRelearn,
-             std::function<void()> onRemove)
+             std::function<void()> onRemove, std::function<void(double, double)> onRange)
       : Row(mapping.targetId, std::move(context)),
+        range_(mapping.range),
+        onRange_(std::move(onRange)),
         source_(midi::sourceLabel(mapping)),
         behaviour_(midi::behaviorLabel(mapping)),
         relearn_(Icon::RotateCcw, kIconButton, 14),
@@ -98,13 +116,52 @@ public:
     remove_.setName("Remove");
     relearn_.onClick = std::move(onRelearn);
     remove_.onClick = std::move(onRemove);
+    if (range_) {
+      for (auto* field : {&low_, &high_}) {
+        field->setFont(Fonts::mono(kSmallPx));
+        field->setCornerRadius(form::kFieldRadius);
+        field->setBorder(form::kFieldBorder);
+        field->setPadding(4, 6, 6);
+        field->setJustification(juce::Justification::centred);
+        field->onChange = [field](const juce::String& text) {
+          const auto kept = text.retainCharacters("0123456789.-+").substring(0, 7);
+          if (kept != text) field->setText(kept);
+        };
+        field->onEnter = [this] { commitRange(); };
+        // Tabbing low → high is one edit; commit once focus leaves both.
+        field->onBlur = [this] {
+          if (!low_.hasFocus() && !high_.hasFocus()) commitRange();
+        };
+        addAndMakeVisible(*field);
+      }
+      // The placeholder doubles as the screen-reader name.
+      low_.setPlaceholder("Low");
+      high_.setPlaceholder("High");
+      low_.setName("Range low");
+      high_.setName("Range high");
+      low_.setText(formatRangeValue(range_->low));
+      high_.setText(formatRangeValue(range_->high));
+    }
   }
 
+  // A focused field losing focus as it is destroyed must not commit.
+  ~MappingRow() override { low_.onBlur = high_.onBlur = nullptr; }
+
   int contentHeight() const override { return juce::jmax(Row::contentHeight(), sourceCellHeight()); }
+  int footerHeight() const override { return range_ ? kRangeGap + rangeFieldHeight() : 0; }
 
   void paint(juce::Graphics& g) override {
     Row::paint(g);
-    const auto box = contentBox();
+    if (range_) {
+      const auto footer = footerBox();
+      const float lineH = static_cast<float>(lineHeight(kSmallPx));
+      const float top = static_cast<float>(footer.getBottom() - rangeFieldHeight()) + (rangeFieldHeight() - lineH) / 2;
+      paint::cssLine(g, kRangeLabel, static_cast<float>(footer.getX()), top, lineH, 200, Fonts::sans(kSmallPx),
+                     theme::kSubtle);
+      paint::cssLine(g, kRangeTo, static_cast<float>(low_.getRight() + kRangeLabelGap), top, lineH, 200,
+                     Fonts::sans(kSmallPx), theme::kSubtle);
+    }
+    const auto box = mainBox();
     const int w = sourceCellWidth(), h = sourceCellHeight();
     const int x = box.getRight() - iconsWidth() - kRowGap - w;
     const float top = static_cast<float>(box.getY() + (box.getHeight() - h) / 2);
@@ -116,13 +173,46 @@ public:
   }
 
   void resized() override {
-    const auto box = contentBox();
+    const auto box = mainBox();
     const int y = box.getY() + (box.getHeight() - kIconButton) / 2;
     remove_.setBounds(box.getRight() - kIconButton, y, kIconButton, kIconButton);
     relearn_.setBounds(remove_.getX() - kIconGap - kIconButton, y, kIconButton, kIconButton);
+    if (range_) {
+      const auto footer = footerBox();
+      const int fieldY = footer.getBottom() - rangeFieldHeight();
+      int x = footer.getX() + textWidth(kRangeLabel) + kRangeLabelGap;
+      low_.setBounds(x, fieldY, kRangeFieldWidth, rangeFieldHeight());
+      x = low_.getRight() + kRangeLabelGap + textWidth(kRangeTo) + kRangeLabelGap;
+      high_.setBounds(x, fieldY, kRangeFieldWidth, rangeFieldHeight());
+    }
   }
 
 private:
+  inline static const juce::String kRangeLabel = "Range";
+  inline static const juce::String kRangeTo = "to";
+
+  static int rangeFieldHeight() { return monoLineHeight(kSmallPx) + 2 * 4 + 2; }
+  static int textWidth(const juce::String& text) {
+    return juce::roundToInt(std::ceil(Fonts::width(Fonts::sans(kSmallPx), text)));
+  }
+
+  // Enter or blur: send both ends when they parse and moved; otherwise snap
+  // the fields back to the engine's values (it clamps to the control).
+  void commitRange() {
+    const auto parse = [](const TextField& field) -> std::optional<double> {
+      const auto text = field.text().trim();
+      if (!text.containsAnyOf("0123456789")) return std::nullopt;
+      return text.getDoubleValue();
+    };
+    const auto low = parse(low_), high = parse(high_);
+    if (low && high && (*low != range_->low || *high != range_->high)) {
+      if (onRange_) onRange_(*low, *high);
+      return;
+    }
+    low_.setText(formatRangeValue(range_->low));
+    high_.setText(formatRangeValue(range_->high));
+  }
+
   static int iconsWidth() { return 2 * kIconButton + kIconGap; }
   int sourceCellWidth() const {
     return juce::roundToInt(juce::jmax(Fonts::width(Fonts::mono(kSourcePx), source_),
@@ -131,8 +221,11 @@ private:
   static int sourceCellHeight() { return monoLineHeight(kSourcePx) + kSubtitleGap + lineHeight(kSubtitlePx); }
   int trailingWidth() const override { return kRowGap + sourceCellWidth() + kRowGap + iconsWidth(); }
 
+  std::optional<MidiRange> range_;
+  std::function<void(double, double)> onRange_;
   juce::String source_, behaviour_;
   IconButton relearn_, remove_;
+  TextField low_, high_;
 };
 
 // LearningRow
@@ -352,9 +445,17 @@ void MidiMapSection::rebuild() {
       pending = false;
     } else {
       const auto id = mapping.targetId;
+      // The range commit lands from a field callback; the refresh it causes
+      // rebuilds (destroys) this row, so hop off the field's stack first.
+      juce::Component::SafePointer<MidiMapSection> self(this);
       rows.push_back(std::make_unique<MappingRow>(
           mapping, targetContext(id), [&store, id] { store.startLearn(id); },
-          [&store, id] { store.removeMapping(id); }));
+          [&store, id] { store.removeMapping(id); },
+          [self, id](double low, double high) {
+            juce::MessageManager::callAsync([self, id, low, high] {
+              if (self != nullptr) self->services_.midiMap.setCcRange(id, low, high);
+            });
+          }));
     }
   }
   // A learn armed for a not-yet-mapped target renders as a pending row at

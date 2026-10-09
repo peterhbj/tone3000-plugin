@@ -220,6 +220,9 @@ bool ProcessorBackend::removeMidiMapping(const juce::String& targetId) {
 bool ProcessorBackend::setMidiCcMapping(const juce::String& targetId, int cc) {
   return processor_.midiMapper.setCcMapping(targetId, cc);
 }
+bool ProcessorBackend::setMidiCcRange(const juce::String& targetId, double low, double high) {
+  return processor_.midiMapper.setCcRange(targetId, static_cast<float>(low), static_cast<float>(high));
+}
 
 // Meters / tuner / auto-measure
 juce::var ProcessorBackend::getMeterLevels() { return processor_.getMeterLevels(); }

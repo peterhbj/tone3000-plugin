@@ -24533,7 +24533,20 @@
      {
       "targetId": "inputLevel",
       "source": "cc",
-      "number": 11
+      "number": 11,
+      "rangeLow": 0,
+      "rangeHigh": 1,
+      "rangeMin": 0,
+      "rangeMax": 1
+     },
+     {
+      "targetId": "pitchSemitones",
+      "source": "cc",
+      "number": 7,
+      "rangeLow": 0,
+      "rangeHigh": 12,
+      "rangeMin": -24,
+      "rangeMax": 24
      },
      {
       "targetId": "block1Power",
