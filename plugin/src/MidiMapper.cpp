@@ -111,6 +111,11 @@ void MidiMapper::applyEvent(Mapping& mapping, const juce::MidiMessage& msg) {
         pendingPresetSteps.fetch_add(mapping.presetDelta);
         triggerAsyncUpdate();
         return;
+      case Kind::presetLoad:
+        // Same hop; only the last pressed preset matters, so a plain store.
+        pendingPresetLoad.store(mapping.presetLoadSerial);
+        triggerAsyncUpdate();
+        return;
       case Kind::parameter: {
         auto& param = *mapping.param;
         param.setValueNotifyingHost(param.getValue() < 0.5f ? 1.0f : 0.0f);
@@ -210,15 +215,17 @@ MidiMapper::Mapping MidiMapper::makeMapping(const juce::String& targetId, Source
   const int presetDelta = targetId == kPresetNextTarget   ? 1
                           : targetId == kPresetPrevTarget ? -1
                                                           : 0;
-  const Kind kind = presetDelta != 0          ? Kind::presetStep
-                    : targetId == kStereoTarget ? Kind::stereoMode
-                    : block.index >= 0          ? Kind::blockPower
-                                                : Kind::parameter;
+  const Kind kind = presetDelta != 0                ? Kind::presetStep
+                    : isPresetLoadTarget(targetId)   ? Kind::presetLoad
+                    : targetId == kStereoTarget       ? Kind::stereoMode
+                    : block.index >= 0                ? Kind::blockPower
+                                                      : Kind::parameter;
   auto* param = kind == Kind::parameter ? parameters.getParameter(targetId) : nullptr;
   jassert(kind != Kind::parameter || param != nullptr);  // callers validate the id first
   const bool toggle = kind != Kind::parameter || source == Source::note ||
                       (param != nullptr && param->isBoolean());
-  return {targetId, kind, param, block.index, block.right, presetDelta, source, number, toggle};
+  const int serial = kind == Kind::presetLoad ? nextPresetLoadSerial.fetch_add(1) : 0;
+  return {targetId, kind, param, block.index, block.right, presetDelta, serial, source, number, toggle};
 }
 
 void MidiMapper::notifyChanged() {
@@ -258,6 +265,22 @@ void MidiMapper::handleAsyncUpdate() {
 
   if (pendingStereoToggles.exchange(0) % 2 != 0 && onStereoToggle)
     onStereoToggle();
+
+  // A direct preset load lands first, so steps pressed after it walk on
+  // from that preset.
+  if (const int serial = pendingPresetLoad.exchange(0); serial != 0) {
+    juce::String presetId;
+    {
+      const juce::SpinLock::ScopedLockType lock(mapLock);
+      for (const auto& mapping : mappings)
+        if (mapping.kind == Kind::presetLoad && mapping.presetLoadSerial == serial)
+          presetId = mapping.targetId.substring(
+              static_cast<int>(std::char_traits<char>::length(kPresetLoadPrefix)));
+    }
+    // Empty when the mapping was removed/relearned before the hop: drop it.
+    if (presetId.isNotEmpty() && onPresetLoad)
+      onPresetLoad(presetId);
+  }
 
   if (const int steps = pendingPresetSteps.exchange(0); steps != 0 && onPresetStep)
     onPresetStep(steps);

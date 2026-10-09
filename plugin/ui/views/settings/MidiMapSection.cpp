@@ -20,8 +20,9 @@ constexpr int kCcFieldWidth = 54;
 const juce::String kEmptyCopy =
     "No mappings yet. Choose a control, then move it on your MIDI device or type its CC number.";
 const juce::String kPresetsCaption =
-    "Map Previous / Next Preset to step through presets from CC or note buttons. Program change messages also "
-    "switch presets directly; each preset shows its PC number in the preset browser.";
+    "Map Previous / Next Preset to step through presets, or map a preset itself to load it from one CC or note "
+    "button. Program change messages also switch presets directly; each preset shows its PC number in the "
+    "preset browser.";
 
 int lineHeight(float px) { return Fonts::normalLineHeight(px); }
 int monoLineHeight(float px) { return Fonts::normalLineHeight(Fonts::mono(px)); }
@@ -32,10 +33,8 @@ int monoLineHeight(float px) { return Fonts::normalLineHeight(Fonts::mono(px)); 
 // rows add their right-hand controls. Non-first rows draw a hairline on top.
 class MidiMapSection::Row : public juce::Component {
 public:
-  Row(juce::String targetId, juce::String context) : targetId_(std::move(targetId)), context_(std::move(context)) {
-    if (const auto* target = midi::targetById(targetId_)) title_ = target->name;
-    else title_ = targetId_;
-  }
+  Row(juce::String targetId, juce::String title, juce::String context)
+      : targetId_(std::move(targetId)), title_(std::move(title)), context_(std::move(context)) {}
 
   const juce::String& targetId() const { return targetId_; }
   void setFirst(bool first) { first_ = first; }
@@ -83,9 +82,9 @@ private:
 // icon buttons (muted at rest, white on hover).
 class MidiMapSection::MappingRow : public Row {
 public:
-  MappingRow(const MidiMapping& mapping, juce::String context, std::function<void()> onRelearn,
+  MappingRow(const MidiMapping& mapping, juce::String title, juce::String context, std::function<void()> onRelearn,
              std::function<void()> onRemove)
-      : Row(mapping.targetId, std::move(context)),
+      : Row(mapping.targetId, std::move(title), std::move(context)),
         source_(midi::sourceLabel(mapping)),
         behaviour_(midi::behaviorLabel(mapping)),
         relearn_(Icon::RotateCcw, kIconButton, 14),
@@ -124,9 +123,11 @@ public:
 
 private:
   static int iconsWidth() { return 2 * kIconButton + kIconGap; }
+  // Rounded up: a cell a fraction of a pixel narrower than its text
+  // ellipsizes it ("CC 64" → "CC …").
   int sourceCellWidth() const {
-    return juce::roundToInt(juce::jmax(Fonts::width(Fonts::mono(kSourcePx), source_),
-                                       Fonts::width(Fonts::sans(kSubtitlePx), behaviour_)));
+    return static_cast<int>(std::ceil(juce::jmax(Fonts::width(Fonts::mono(kSourcePx), source_),
+                                                 Fonts::width(Fonts::sans(kSubtitlePx), behaviour_))));
   }
   static int sourceCellHeight() { return monoLineHeight(kSourcePx) + kSubtitleGap + lineHeight(kSubtitlePx); }
   int trailingWidth() const override { return kRowGap + sourceCellWidth() + kRowGap + iconsWidth(); }
@@ -140,9 +141,10 @@ private:
 // and Cancel.
 class MidiMapSection::LearningRow : public Row, private juce::Timer {
 public:
-  LearningRow(juce::String targetId, juce::String context, std::function<void(const juce::String&)> onDraft,
-              std::function<void()> onCommit, std::function<void()> onCancel)
-      : Row(std::move(targetId), std::move(context)),
+  LearningRow(juce::String targetId, juce::String title, juce::String context,
+              std::function<void(const juce::String&)> onDraft, std::function<void()> onCommit,
+              std::function<void()> onCancel)
+      : Row(std::move(targetId), std::move(title), std::move(context)),
         cancel_("Cancel", FormButton::text(kSmallPx, true, theme::kWhite, 2, 4, juce::Justification::centred)) {
     cc_.setPlaceholder("CC #");
     cc_.setFont(Fonts::mono(kSmallPx));
@@ -293,15 +295,39 @@ MidiMapSection::MidiMapSection(Services& services)
 
   services_.midiMap.addListener(this);
   services_.chain.addListener(this);
+  services_.presets.addListener(this);
   rebuild();
 }
 
 MidiMapSection::~MidiMapSection() {
+  services_.presets.removeListener(this);
   services_.chain.removeListener(this);
   services_.midiMap.removeListener(this);
 }
 
+const PresetInfo* MidiMapSection::presetFor(const juce::String& targetId) const {
+  const auto presetId = midi::presetIdForTarget(targetId);
+  if (!presetId) return nullptr;
+  for (const auto& preset : services_.presets.presets())
+    if (preset.id == *presetId) return &preset;
+  return nullptr;
+}
+
+juce::String MidiMapSection::targetTitle(const juce::String& targetId) const {
+  if (const auto* target = midi::targetById(targetId)) return target->name;
+  if (const auto* preset = presetFor(targetId)) return preset->name;
+  // A preset deleted outside this instance (another window, the file
+  // manager): the native side only cleans up deletes it performs itself.
+  if (midi::presetIdForTarget(targetId)) return "Missing preset";
+  return targetId;
+}
+
 juce::String MidiMapSection::targetContext(const juce::String& targetId) const {
+  if (midi::presetIdForTarget(targetId)) {
+    const auto* preset = presetFor(targetId);
+    const juce::String sep = juce::String::fromUTF8(" \xc2\xb7 ");
+    return juce::String(midi::kPresetLoadGroup) + (preset != nullptr && preset->factory ? sep + "Factory" : "");
+  }
   const auto block = midi::blockPowerTarget(targetId);
   if (!block) {
     const auto* target = midi::targetById(targetId);
@@ -336,7 +362,7 @@ void MidiMapSection::rebuild() {
   auto makeLearning = [&](const juce::String& targetId) -> std::unique_ptr<Row> {
     if (learning != nullptr) return std::move(learning);
     return std::make_unique<LearningRow>(
-        targetId, targetContext(targetId),
+        targetId, targetTitle(targetId), targetContext(targetId),
         [this](const juce::String& draft) {
           ccDraft_ = draft;
           armTimeout();
@@ -353,7 +379,7 @@ void MidiMapSection::rebuild() {
     } else {
       const auto id = mapping.targetId;
       rows.push_back(std::make_unique<MappingRow>(
-          mapping, targetContext(id), [&store, id] { store.startLearn(id); },
+          mapping, targetTitle(id), targetContext(id), [&store, id] { store.startLearn(id); },
           [&store, id] { store.removeMapping(id); }));
     }
   }
@@ -372,11 +398,25 @@ void MidiMapSection::rebuild() {
     return n;
   };
   std::vector<SelectField::Option> options;
+  // One load target per preset, in browser order, right after the preset
+  // step actions (the catalog leads with them).
+  auto addPresetLoads = [&] {
+    for (const auto& preset : services_.presets.presets()) {
+      const auto id = midi::presetLoadTarget(preset.id);
+      if (state->mappingFor(id) != nullptr) continue;
+      options.push_back({id, preset.name, targetContext(id)});
+    }
+  };
   for (const auto& target : midi::mappableTargets()) {
-    if (state->mappingFor(target.id) != nullptr) continue;
+    const bool stepAction = target.id == "presetNext";
+    if (state->mappingFor(target.id) != nullptr) {
+      if (stepAction) addPresetLoads();
+      continue;
+    }
     if (const auto block = midi::blockPowerTarget(target.id); block && block->index >= laneCount(block->right))
       continue;
     options.push_back({target.id, target.name, targetContext(target.id)});
+    if (stepAction) addPresetLoads();
   }
   const bool anyOptions = !options.empty();
   picker_.setOptions(std::move(options));

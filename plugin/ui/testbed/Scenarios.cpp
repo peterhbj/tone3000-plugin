@@ -89,6 +89,12 @@ const std::map<juce::String, Drive>& drives() {
          clickByHelp(root, "Pitch Shift:", /*right=*/true);
          wait(200);
        }},
+      {"chrome-fuzz", [](PluginRoot&, MockBackend&) { wait(100); }},
+      {"chrome-fuzz-deck",
+       [](PluginRoot& root, MockBackend&) {
+         clickByHelp(root, "Fuzz:", /*right=*/true);
+         wait(200);
+       }},
       {"chrome-spread-deck",
        [](PluginRoot& root, MockBackend&) {
          clickByHelp(root, "Offset:", /*right=*/true);
@@ -477,6 +483,19 @@ const std::map<juce::String, Drive>& drives() {
          scrollSettingsTo(root, "MIDI Mapping");
        }},
       {"settings-midi-picker",
+       [](PluginRoot& root, MockBackend&) {
+         openSettings(root);
+         scrollSettingsTo(root, "MIDI Mapping");
+         if (auto* picker = find(root, [](juce::Component& c) { return c.getName() == "Control to map"; }))
+           click(root, *picker);
+         wait(400);
+       }},
+      {"settings-midi-presets",
+       [](PluginRoot& root, MockBackend&) {
+         openSettings(root);
+         scrollSettingsTo(root, "MIDI Mapping");
+       }},
+      {"settings-midi-presets-picker",
        [](PluginRoot& root, MockBackend&) {
          openSettings(root);
          scrollSettingsTo(root, "MIDI Mapping");

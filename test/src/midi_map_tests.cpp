@@ -14,6 +14,9 @@
 //   - CC on a continuous parameter tracks absolutely,
 //   - block-power targets deliver their position and lane (left / right),
 //   - preset prev/next virtual targets deliver coalesced step deltas,
+//   - per-preset load targets ("preset:" + id) load that exact preset,
+//     whatever the list order, last press winning, and are dropped when the
+//     preset is deleted,
 //   - program changes deliver their program number unmapped.
 //
 // The mapper defers non-parameter work to the message thread via
@@ -22,6 +25,7 @@
 #include "Processor.h"
 
 #include <gtest/gtest.h>
+#include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 
 namespace {
@@ -232,6 +236,102 @@ TEST(MidiMapperTest, ProgramChangeDeliversProgramNumber) {
 
   ASSERT_EQ(programs.size(), 1u);
   EXPECT_EQ(programs[0], 5);
+}
+
+TEST(MidiMapperTest, PresetLoadTargetsDeliverTheirPresetId) {
+  TONE3000Processor proc;
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("preset:user:metal", 4));
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("preset:factory:clean", 5));
+
+  std::vector<juce::String> loads;
+  proc.midiMapper.onPresetLoad = [&loads](const juce::String& id) { loads.push_back(id); };
+
+  // One momentary stomp (127 then 0) → one load of exactly that preset.
+  proc.midiMapper.processMidi(ccEvent(4, 127));
+  proc.midiMapper.processMidi(ccEvent(4, 0));
+  pumpMessages();
+  ASSERT_EQ(loads.size(), 1u);
+  EXPECT_EQ(loads[0], "user:metal");
+
+  // Two different presets pressed before the async hop: the last one wins
+  // (loading both would just flash the first).
+  loads.clear();
+  proc.midiMapper.processMidi(ccEvent(4, 127));
+  proc.midiMapper.processMidi(ccEvent(5, 127));
+  pumpMessages();
+  ASSERT_EQ(loads.size(), 1u);
+  EXPECT_EQ(loads[0], "factory:clean");
+}
+
+TEST(MidiMapperTest, PresetLoadRemovedBeforeTheHopIsDropped) {
+  TONE3000Processor proc;
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("preset:user:metal", 4));
+  std::vector<juce::String> loads;
+  proc.midiMapper.onPresetLoad = [&loads](const juce::String& id) { loads.push_back(id); };
+
+  proc.midiMapper.processMidi(ccEvent(4, 127));
+  ASSERT_TRUE(proc.midiMapper.removeMapping("preset:user:metal"));
+  pumpMessages();
+  EXPECT_TRUE(loads.empty()) << "a press must not load a preset whose mapping is gone";
+}
+
+TEST(MidiMapperTest, PresetLoadTargetsValidateAndRoundTripThroughState) {
+  TONE3000Processor proc;
+  EXPECT_FALSE(proc.midiMapper.setCcMapping("preset:", 4)) << "a bare prefix names no preset";
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("preset:user:metal", 4));
+
+  // Survives the plugin-state round trip (projects, standalone autosave).
+  TONE3000Processor restored;
+  restored.midiMapper.restoreFromValueTree(proc.midiMapper.toValueTree());
+  std::vector<juce::String> loads;
+  restored.midiMapper.onPresetLoad = [&loads](const juce::String& id) { loads.push_back(id); };
+  restored.midiMapper.processMidi(ccEvent(4, 127));
+  pumpMessages();
+  ASSERT_EQ(loads.size(), 1u);
+  EXPECT_EQ(loads[0], "user:metal");
+}
+
+// Through the processor's own hook and real presets on disk (temp dir).
+struct TempPresetDir {
+  TempPresetDir()
+      : dir(juce::File::getSpecialLocation(juce::File::tempDirectory)
+                .getChildFile("t3k-midi-map-tests-" + juce::Uuid().toString())) {
+    dir.createDirectory();
+  }
+  ~TempPresetDir() { dir.deleteRecursively(); }
+  juce::File dir;
+};
+
+juce::String savePresetWithBass(TONE3000Processor& proc, const juce::String& name, float bass) {
+  auto* p = proc.parameters.getParameter("toneBass");
+  p->setValueNotifyingHost(p->convertTo0to1(bass));
+  const juce::var saved = proc.savePreset(name);
+  EXPECT_TRUE(saved.isObject()) << "savePreset failed for " << name;
+  return saved["id"].toString();
+}
+
+TEST(MidiMapperTest, PresetLoadTargetLoadsThatPresetAndIsDroppedOnDelete) {
+  TempPresetDir tmp;
+  TONE3000Processor proc;
+  proc.setPresetStoreForTesting(tmp.dir);
+  const juce::String beta = savePresetWithBass(proc, "Beta", 9.0f);
+  const juce::String alpha = savePresetWithBass(proc, "Alpha", 1.0f);  // active
+
+  ASSERT_TRUE(proc.midiMapper.setCcMapping(MidiMapper::presetLoadTarget(beta), 4));
+  // A preset saved later sorts ahead of Beta; a PC number would now point
+  // elsewhere, the per-preset mapping must not.
+  savePresetWithBass(proc, "Aardvark", 5.0f);
+
+  proc.midiMapper.processMidi(ccEvent(4, 127));
+  pumpMessages();
+  EXPECT_FLOAT_EQ(paramValue(proc, "toneBass"), 9.0f) << "CC 4 must load Beta";
+
+  ASSERT_TRUE(proc.deletePreset(beta));
+  pumpMessages();
+  const auto* mappings = proc.midiMapper.getState()["mappings"].getArray();
+  ASSERT_NE(mappings, nullptr);
+  EXPECT_TRUE(mappings->isEmpty()) << "deleting a preset drops its MIDI mapping";
+  juce::ignoreUnused(alpha);
 }
 
 }  // namespace

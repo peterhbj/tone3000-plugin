@@ -45,6 +45,15 @@ struct BlockPowerTarget {
 };
 std::optional<BlockPowerTarget> blockPowerTarget(const juce::String& targetId);
 
+// Per-preset load targets ("preset:" + preset id, mirroring the native
+// MidiMapper::kPresetLoadPrefix): built from the live preset list rather
+// than the static catalog, one trigger per preset.
+inline constexpr const char* kPresetLoadPrefix = "preset:";
+inline constexpr const char* kPresetLoadGroup = "Load Preset";
+juce::String presetLoadTarget(const juce::String& presetId);
+// The preset id behind a "preset:" target; nullopt for anything else.
+std::optional<juce::String> presetIdForTarget(const juce::String& targetId);
+
 // 60 → "C4" (scientific pitch, middle C = C4).
 juce::String noteName(int note);
 // "CC 64" / "Note C2": the mapping row's source column.

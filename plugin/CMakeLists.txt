@@ -352,6 +352,8 @@ target_sources(${PROJECT_NAME}
         src/TunerDetector.cpp
         include/PitchShift.h
         src/PitchShift.cpp
+        include/FuzzFactory.h
+        src/FuzzFactory.cpp
 )
 
 # Include GUI for Desktop builds
