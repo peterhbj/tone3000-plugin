@@ -1,6 +1,7 @@
 #include "NativeEditor.h"
 
 #include "core/Fonts.h"
+#include "core/RootFit.h"
 
 namespace t3k::ui {
 
@@ -132,16 +133,46 @@ double NativeEditor::maxStartScale() const {
   return juce::jlimit(1.0, design::kMaxScale, juce::jmin(fitW, fitH));
 }
 
+bool NativeEditor::windowManagerOwnsSize() const {
+  return processor_.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
+}
+
+double NativeEditor::currentScale() const {
+  const double byWidth = getWidth() / static_cast<double>(design::kWidth);
+  if (!windowManagerOwnsSize()) return byWidth;
+  return juce::jmin(byWidth, getHeight() / static_cast<double>(designHeight()));
+}
+
 void NativeEditor::applyScaledSize(double scale) {
   setSize(juce::roundToInt(design::kWidth * scale), juce::roundToInt(designHeight() * scale));
 }
 
-void NativeEditor::updateResizeConstraints() {
-  setResizeLimits(design::kWidth, designHeight(), juce::roundToInt(design::kWidth * design::kMaxScale),
+void NativeEditor::applyConstraints(juce::ComponentBoundsConstrainer& c) const {
+  if (windowManagerOwnsSize()) {
+    // The standalone window belongs to the window manager: a tiling
+    // compositor (Hyprland, Sway, i3), a maximise or a fullscreen hands us
+    // whatever box the screen has, at any aspect ratio. JUCE's standalone
+    // wrapper pushes that box through this constrainer, so an aspect lock or
+    // a 2x cap here left the editor at its own size inside a bigger window:
+    // a grey strip beside it and the faceplate clipped below (ultrawide
+    // 2560x1080). Take any size and let fitRoot letterbox.
+    c.setSizeLimits(kMinFreeWidth, kMinFreeHeight, kMaxFreeSide, kMaxFreeSide);
+    c.setFixedAspectRatio(0.0);
+    return;
+  }
+  c.setSizeLimits(design::kWidth, designHeight(), juce::roundToInt(design::kWidth * design::kMaxScale),
                   juce::roundToInt(designHeight() * design::kMaxScale));
   // The ratio tracks the chrome strips, so corner drags at any extra-height
   // state preserve the current layout exactly.
-  getConstrainer()->setFixedAspectRatio(static_cast<double>(design::kWidth) / designHeight());
+  c.setFixedAspectRatio(static_cast<double>(design::kWidth) / designHeight());
+}
+
+void NativeEditor::updateResizeConstraints() {
+  // setResizeLimits() installs the default constrainer and re-applies it to
+  // the current bounds; the limits themselves come from applyConstraints.
+  setResizeLimits(design::kWidth, designHeight(), juce::roundToInt(design::kWidth * design::kMaxScale),
+                  juce::roundToInt(designHeight() * design::kMaxScale));
+  applyConstraints(*getConstrainer());
 }
 
 void NativeEditor::setExtraContentHeight(int total, int persistent) {
@@ -152,6 +183,10 @@ void NativeEditor::setExtraContentHeight(int total, int persistent) {
   processor_.editorExtraHeight.store(juce::jlimit(0, kMaxExtraHeight, persistent));
   if (clamped == extraContentHeight_) return;
   const bool grew = clamped > extraContentHeight_;
+  // The scale on screen before the box changes: what a taller box holds
+  // while its resize is pending (see fitRoot).
+  const double scale = getWidth() > 0 ? currentScale() : 1.0;
+  [[maybe_unused]] const int delta = clamped - extraContentHeight_;
   extraContentHeight_ = clamped;
   // Before the constructor has sized us there is nothing to resize yet.
   if (getWidth() == 0) return;
@@ -159,6 +194,7 @@ void NativeEditor::setExtraContentHeight(int total, int persistent) {
   // A taller box keeps the current scale until the (possibly async or
   // refused) host resize lands, or the grace period ends.
   shrinkAllowedAtMs_ = grew ? juce::Time::currentTimeMillis() + kShrinkGraceMs : 0;
+  heldScale_ = scale;
 #if JUCE_IOS
   // The window is the screen; it cannot grow. Shrink the box to fit.
   fitRoot();
@@ -168,13 +204,14 @@ void NativeEditor::setExtraContentHeight(int total, int persistent) {
   // fitRoot letterboxes instead. Constrainer values are set directly rather
   // than via setResizeLimits(), which re-applies to the *current* bounds and
   // can snap the width for a frame mid-change.
-  const double scale = currentScale();
-  if (auto* c = getConstrainer()) {
-    c->setSizeLimits(design::kWidth, designHeight(), juce::roundToInt(design::kWidth * design::kMaxScale),
-                     juce::roundToInt(designHeight() * design::kMaxScale));
-    c->setFixedAspectRatio(static_cast<double>(design::kWidth) / designHeight());
+  if (auto* c = getConstrainer()) applyConstraints(*c);
+  if (windowManagerOwnsSize()) {
+    // Any aspect goes here, so grow (or shrink) by the strip alone and keep
+    // the width the window manager gave us; a refusal letterboxes.
+    setSize(getWidth(), juce::jmax(kMinFreeHeight, getHeight() + juce::roundToInt(delta * scale)));
+  } else {
+    applyScaledSize(scale);
   }
-  applyScaledSize(scale);
   fitRoot();
 #endif
 }
@@ -182,33 +219,38 @@ void NativeEditor::setExtraContentHeight(int total, int persistent) {
 void NativeEditor::fitRoot() {
   const double byWidth = getWidth() / static_cast<double>(design::kWidth);
   const double byHeight = getHeight() / static_cast<double>(designHeight());
-  double scale = byWidth;
-  if (byHeight < byWidth - 1e-6) {
-    // The box is taller than the window allows. Hold the width-driven scale
-    // while a resize may still land (bottom strip clips, black on black),
-    // then fit.
-    const auto now = juce::Time::currentTimeMillis();
-    if (now < shrinkAllowedAtMs_) {
-      startTimer(static_cast<int>(shrinkAllowedAtMs_ - now) + 1);
-    } else {
-      stopTimer();
-      scale = byHeight;
-    }
+  // Fit both ways; a window wider than the design box (ultrawide, a tiled
+  // or maximised standalone) then gets a wider layout (see below).
+  double scale = juce::jmin(byWidth, byHeight);
+  const auto now = juce::Time::currentTimeMillis();
+  if (now < shrinkAllowedAtMs_ && byHeight < juce::jmin(byWidth, heldScale_) - 1e-6) {
+    // The box just grew taller than the window allows. Hold the scale it
+    // had while a resize may still land (bottom strip clips, black on
+    // black), then fit.
+    startTimer(static_cast<int>(shrinkAllowedAtMs_ - now) + 1);
+    scale = juce::jmin(byWidth, heldScale_);
   } else {
     stopTimer();
   }
-  scale = juce::jmax(0.05, scale);
-  root_.setTransform(juce::AffineTransform::scale(static_cast<float>(scale)));
-  services_.zoom.set(scale);
-  // Top-anchored, horizontally centred. iOS centres vertically too: its
+  // Top-anchored; a box wider than the design aspect widens the root's
+  // layout to fill it (no side bars). iOS centres vertically too: its
   // window never resizes, so nothing can jump.
-  const int x = juce::roundToInt((getWidth() - design::kWidth * scale) / 2);
+  const auto fit = design::fitAt(getWidth(), scale);
+  scale = fit.scale;
+  services_.zoom.set(scale);
+  root_.setLayoutWidth(fit.layoutWidth);
+  const int x = fit.x;
 #if JUCE_IOS
   const int y = juce::jmax(0, juce::roundToInt((getHeight() - designHeight() * scale) / 2));
 #else
   const int y = 0;
 #endif
-  root_.setTopLeftPosition(x, y);
+  // The offset rides in the transform: a component's position is applied
+  // before its transform, so setTopLeftPosition(x, y) would land at
+  // (x, y) * scale and push a letterboxed root off the right edge.
+  root_.setTopLeftPosition(0, 0);
+  root_.setTransform(juce::AffineTransform::scale(static_cast<float>(scale))
+                         .translated(static_cast<float>(x), static_cast<float>(y)));
 }
 
 void NativeEditor::paint(juce::Graphics& g) { g.fillAll(juce::Colours::black); }

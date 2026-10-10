@@ -1,6 +1,9 @@
 // Native UI testbed. Renders PluginRoot over the fixture-driven MockBackend:
 //
-//   UiTestbed --capture <outDir> [--ref <refDir>] [filter...] PNGs (+ diff table)
+//   UiTestbed --capture <outDir> [--ref <refDir>] [--size WxH] [filter...]
+//                                                            PNGs (+ diff table); --size
+//                                                            fits each scenario into a
+//                                                            WxH screen (ultrawide etc.)
 //   UiTestbed --compare <ref.png> <candidate.png> [diff.png]
 //   UiTestbed --selftest                                     unit tests (pure logic)
 //   UiTestbed --bench [--seconds N] [--json out] [phase...]  CPU / memory under load (Bench.h)
@@ -52,9 +55,10 @@ private:
 // screen's unnamed Tab stops (the accessibility audit rides along with the
 // pixel capture: every screen the suite reaches gets checked).
 juce::Image captureScenario(const Scenario& scenario, const juce::var& fixtures, bool& driveMissing,
-                            juce::StringArray& unnamed) {
+                            juce::StringArray& unnamed, juce::Rectangle<int> box) {
   MockBackend backend(scenario.data);
   ScaledHost host(backend, scenario, fixtures);
+  if (!box.isEmpty()) host.setFixedBox(box.getWidth(), box.getHeight());
   auto& root = host.pluginRoot();
 
   auto* mm = juce::MessageManager::getInstance();
@@ -66,6 +70,8 @@ juce::Image captureScenario(const Scenario& scenario, const juce::var& fixtures,
   }
   mm->runDispatchLoopUntil(scenario.settleMs());
   unnamed = drive::unnamedFocusables(root);
+  // A fixed box captures the whole screen as the user sees it, at 1x.
+  if (!box.isEmpty()) return host.createComponentSnapshot(host.getLocalBounds(), true, 1.0f);
   return root.createComponentSnapshot(root.getLocalBounds(), true, 2.0f);
 }
 
@@ -73,10 +79,16 @@ int runCapture(const juce::StringArray& args) {
   const juce::File outDir(juce::File::getCurrentWorkingDirectory().getChildFile(args[1]));
   outDir.createDirectory();
   juce::File refDir;
+  juce::Rectangle<int> box;  // --size: a fixed screen box
   juce::StringArray filters;  // substrings; a scenario runs if it matches any
   for (int i = 2; i < args.size(); ++i) {
     if (args[i] == "--ref" && i + 1 < args.size())
       refDir = juce::File::getCurrentWorkingDirectory().getChildFile(args[++i]);
+    else if (args[i] == "--size" && i + 1 < args.size()) {
+      const auto size = args[++i];
+      box = {size.upToFirstOccurrenceOf("x", false, true).getIntValue(),
+             size.fromFirstOccurrenceOf("x", false, true).getIntValue()};
+    }
     else
       filters.add(args[i]);
   }
@@ -94,7 +106,7 @@ int runCapture(const juce::StringArray& args) {
     if (!selected(scenario.id)) continue;
     bool driveMissing = false;
     juce::StringArray unnamed;
-    const auto image = captureScenario(scenario, fixtures.root, driveMissing, unnamed);
+    const auto image = captureScenario(scenario, fixtures.root, driveMissing, unnamed, box);
     const auto file = outDir.getChildFile(scenario.id + ".png");
     file.deleteFile();
     if (juce::FileOutputStream out(file); out.openedOk())

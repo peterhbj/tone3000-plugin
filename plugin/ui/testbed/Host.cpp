@@ -1,6 +1,7 @@
 #include "Host.h"
 
 #include "core/Design.h"
+#include "core/RootFit.h"
 
 namespace t3k::ui::testbed {
 
@@ -84,8 +85,15 @@ ScaledHost::ScaledHost(Backend& backend, const Scenario& scenario, const juce::v
   resized();  // the root's chrome report already sized us; fit it now that it exists
 }
 
+void ScaledHost::setFixedBox(int width, int height) {
+  fixedBox_ = {width, height};
+  setSize(width, height);
+}
+
 void ScaledHost::setExtraContentHeight(int total, int) {
-  if (auto* window = findParentComponentOfClass<juce::DocumentWindow>()) {
+  if (!fixedBox_.isEmpty()) {
+    resized();  // the box holds; the root refits to the new chrome height
+  } else if (auto* window = findParentComponentOfClass<juce::DocumentWindow>()) {
     const double scale = getWidth() / static_cast<double>(design::kWidth);
     window->setContentComponentSize(juce::roundToInt(design::kWidth * scale),
                                     juce::roundToInt((design::kHeight + total) * scale));
@@ -97,11 +105,15 @@ void ScaledHost::setExtraContentHeight(int total, int) {
 
 void ScaledHost::resized() {
   if (root == nullptr) return;
-  const double scale = juce::jmax(0.05, juce::jmin(getWidth() / double(design::kWidth),
-                                                   getHeight() / double(root->designHeight())));
-  root->setTransform(juce::AffineTransform::scale(static_cast<float>(scale)));
-  root->setTopLeftPosition(juce::roundToInt((getWidth() - design::kWidth * scale) / 2), 0);
-  services.zoom.set(scale);
+  // Mirrors NativeEditor::fitRoot: a wider box widens the root's layout,
+  // and the offset rides in the transform (a position would be scaled
+  // along with the root).
+  const auto fit = design::fitAt(getWidth(), design::fitScale(getWidth(), getHeight(), root->designHeight()));
+  services.zoom.set(fit.scale);
+  root->setLayoutWidth(fit.layoutWidth);
+  root->setTopLeftPosition(0, 0);
+  root->setTransform(juce::AffineTransform::scale(static_cast<float>(fit.scale))
+                         .translated(static_cast<float>(fit.x), 0.0f));
 }
 
 }  // namespace t3k::ui::testbed

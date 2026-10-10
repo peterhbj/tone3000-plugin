@@ -52,10 +52,23 @@ private:
   // resize is pending, before shrinking to fit.
   static constexpr int kShrinkGraceMs = 450;
 
+  // The standalone's free-size bounds: small enough for a narrow tile, big
+  // enough for any display.
+  static constexpr int kMinFreeWidth = 320;
+  static constexpr int kMinFreeHeight = 200;
+  static constexpr int kMaxFreeSide = 16384;
+
   int designHeight() const { return design::kHeight + extraContentHeight_; }
-  double currentScale() const { return getWidth() / static_cast<double>(design::kWidth); }
+  // True in the standalone app, where the window manager (tiling,
+  // maximise, fullscreen) decides the window's size and aspect: the editor
+  // takes any box and letterboxes. In a DAW the box is aspect-locked.
+  bool windowManagerOwnsSize() const;
+  // The root's scale for the current box: the width's in an aspect-locked
+  // box, the fitting one (width or height, whichever is tighter) otherwise.
+  double currentScale() const;
   double maxStartScale() const;
   void applyScaledSize(double scale);
+  void applyConstraints(juce::ComponentBoundsConstrainer& c) const;
   void updateResizeConstraints();
   void fitRoot();
   void timerCallback() override { fitRoot(); }
@@ -115,6 +128,7 @@ private:
   // parentHierarchyChanged).
   bool restoringSize_ = false;
   juce::int64 shrinkAllowedAtMs_ = 0;
+  double heldScale_ = 1.0;  // the scale a just-grown box holds (fitRoot)
   ProcessorBackend backend_;
   // Owned here rather than in Services: the session persists its tokens in
   // the prefs, and Services needs the session.
