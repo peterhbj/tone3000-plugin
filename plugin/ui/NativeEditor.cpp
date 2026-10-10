@@ -1,6 +1,7 @@
 #include "NativeEditor.h"
 
 #include "core/Fonts.h"
+#include "core/RootFit.h"
 
 namespace t3k::ui {
 
@@ -218,8 +219,8 @@ void NativeEditor::setExtraContentHeight(int total, int persistent) {
 void NativeEditor::fitRoot() {
   const double byWidth = getWidth() / static_cast<double>(design::kWidth);
   const double byHeight = getHeight() / static_cast<double>(designHeight());
-  // Fit both ways: a window wider than the design box (ultrawide, a tiled
-  // or maximised standalone) letterboxes left and right.
+  // Fit both ways; a window wider than the design box (ultrawide, a tiled
+  // or maximised standalone) then gets a wider layout (see below).
   double scale = juce::jmin(byWidth, byHeight);
   const auto now = juce::Time::currentTimeMillis();
   if (now < shrinkAllowedAtMs_ && byHeight < juce::jmin(byWidth, heldScale_) - 1e-6) {
@@ -231,11 +232,14 @@ void NativeEditor::fitRoot() {
   } else {
     stopTimer();
   }
-  scale = juce::jmax(0.05, scale);
-  services_.zoom.set(scale);
-  // Top-anchored, horizontally centred. iOS centres vertically too: its
+  // Top-anchored; a box wider than the design aspect widens the root's
+  // layout to fill it (no side bars). iOS centres vertically too: its
   // window never resizes, so nothing can jump.
-  const int x = juce::roundToInt((getWidth() - design::kWidth * scale) / 2);
+  const auto fit = design::fitAt(getWidth(), scale);
+  scale = fit.scale;
+  services_.zoom.set(scale);
+  root_.setLayoutWidth(fit.layoutWidth);
+  const int x = fit.x;
 #if JUCE_IOS
   const int y = juce::jmax(0, juce::roundToInt((getHeight() - designHeight() * scale) / 2));
 #else

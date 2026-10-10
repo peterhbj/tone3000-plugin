@@ -68,6 +68,12 @@ public:
 
   // Current design-space height: the core plus whatever chrome strips show.
   int designHeight() const { return getHeight(); }
+  // The design-space width the shell lays us out at: design::kWidth, or
+  // more when the window is wider than the design box (an ultrawide or
+  // tiled standalone), in which case every band stretches to fill it
+  // instead of the shell letterboxing.
+  void setLayoutWidth(int width);
+  int layoutWidth() const { return layoutWidth_; }
 
   Services& services() { return services_; }
   juce::Component& overlayLayer() override { return overlay_; }
@@ -104,6 +110,7 @@ public:
 
 private:
   enum class BannerPhase { hidden, waiting, shown };
+  int layoutWidth_ = design::kWidth;
 
   void hintChanged() override;
   void bannerChanged() override;
