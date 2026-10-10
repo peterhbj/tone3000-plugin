@@ -99,8 +99,11 @@ void ScaledHost::resized() {
   if (root == nullptr) return;
   const double scale = juce::jmax(0.05, juce::jmin(getWidth() / double(design::kWidth),
                                                    getHeight() / double(root->designHeight())));
-  root->setTransform(juce::AffineTransform::scale(static_cast<float>(scale)));
-  root->setTopLeftPosition(juce::roundToInt((getWidth() - design::kWidth * scale) / 2), 0);
+  // Mirrors NativeEditor::fitRoot: the centring offset rides in the
+  // transform (a position would be scaled along with the root).
+  const int x = juce::roundToInt((getWidth() - design::kWidth * scale) / 2);
+  root->setTopLeftPosition(0, 0);
+  root->setTransform(juce::AffineTransform::scale(static_cast<float>(scale)).translated(static_cast<float>(x), 0.0f));
   services.zoom.set(scale);
 }
 
